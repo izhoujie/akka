@@ -1,14 +1,15 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.util
 
-import org.scalatest.WordSpec
-import org.scalatest.Matchers
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AnyWordSpec
 
-class SwitchSpec extends WordSpec with Matchers {
+class SwitchSpec extends AnyWordSpec with Matchers {
 
   "Switch" must {
 

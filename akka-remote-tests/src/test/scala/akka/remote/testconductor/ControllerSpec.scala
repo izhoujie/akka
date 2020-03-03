@@ -1,10 +1,11 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.remote.testconductor
 
 import akka.testkit.AkkaSpec
-import akka.actor.{ PoisonPill, Props, AddressFromURIString }
+import akka.actor.{ AddressFromURIString, PoisonPill, Props }
 import akka.testkit.ImplicitSender
 import akka.remote.testconductor.Controller.NodeInfo
 import java.net.InetSocketAddress
@@ -13,7 +14,7 @@ import java.net.InetAddress
 object ControllerSpec {
   val config = """
     akka.testconductor.barrier-timeout = 5s
-    akka.actor.provider = akka.remote.RemoteActorRefProvider
+    akka.actor.provider = remote
     akka.actor.debug.fsm = on
     akka.actor.debug.lifecycle = on
     """

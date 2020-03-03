@@ -1,7 +1,11 @@
+/*
+ * Copyright (C) 2018-2020 Lightbend Inc. <https://www.lightbend.com>
+ */
+
 package akka.persistence
 
-import akka.actor.{ Props, Actor, ActorRef }
-import akka.testkit.{ TestProbe, ImplicitSender, AkkaSpec }
+import akka.actor.{ ActorLogging, ActorRef, Props }
+import akka.testkit.ImplicitSender
 
 object SnapshotRecoveryLocalStoreSpec {
   val persistenceId = "europe"
@@ -12,32 +16,37 @@ object SnapshotRecoveryLocalStoreSpec {
   class SaveSnapshotTestPersistentActor(name: String, probe: ActorRef) extends NamedPersistentActor(name) {
     var state = s"State for actor ${name}"
     def receiveCommand = {
-      case TakeSnapshot            ⇒ saveSnapshot(state)
-      case SaveSnapshotSuccess(md) ⇒ probe ! md.sequenceNr
-      case GetState                ⇒ probe ! state
+      case TakeSnapshot            => saveSnapshot(state)
+      case SaveSnapshotSuccess(md) => probe ! md.sequenceNr
+      case GetState                => probe ! state
     }
     def receiveRecover = {
-      case _ ⇒
+      case _ =>
     }
   }
 
-  class LoadSnapshotTestPersistentActor(name: String, probe: ActorRef) extends NamedPersistentActor(name) {
+  class LoadSnapshotTestPersistentActor(name: String, probe: ActorRef)
+      extends NamedPersistentActor(name)
+      with ActorLogging {
+
+    override def recovery = Recovery(toSequenceNr = 0)
+
     def receiveCommand = {
-      case _ ⇒
+      case _ =>
     }
     def receiveRecover = {
-      case SnapshotOffer(md, s) ⇒ probe ! ((md, s))
-      case other                ⇒ probe ! other
+      case other => probe ! other
     }
-    override def preStart() = ()
   }
 }
 
-class SnapshotRecoveryLocalStoreSpec extends AkkaSpec(PersistenceSpec.config("inmem", "SnapshotRecoveryLocalStoreSpec")) with PersistenceSpec with ImplicitSender {
+class SnapshotRecoveryLocalStoreSpec
+    extends PersistenceSpec(PersistenceSpec.config("inmem", "SnapshotRecoveryLocalStoreSpec"))
+    with ImplicitSender {
 
   import SnapshotRecoveryLocalStoreSpec._
 
-  override protected def beforeEach() {
+  override protected def beforeEach(): Unit = {
     super.beforeEach()
 
     val persistentActor1 = system.actorOf(Props(classOf[SaveSnapshotTestPersistentActor], persistenceId, testActor))
@@ -45,20 +54,14 @@ class SnapshotRecoveryLocalStoreSpec extends AkkaSpec(PersistenceSpec.config("in
     persistentActor1 ! TakeSnapshot
     persistentActor2 ! TakeSnapshot
     expectMsgAllOf(0L, 0L)
-
   }
 
   "A persistent actor which is persisted at the same time as another actor whose persistenceId is an extension of the first " must {
     "recover state only from its own correct snapshot file" in {
 
-      val recoveringActor = system.actorOf(Props(classOf[LoadSnapshotTestPersistentActor], persistenceId, testActor))
+      system.actorOf(Props(classOf[LoadSnapshotTestPersistentActor], persistenceId, testActor))
 
-      recoveringActor ! Recover()
-
-      expectMsgPF() {
-        case (SnapshotMetadata(pid, seqNo, timestamp), state) ⇒
-          pid should ===(persistenceId)
-      }
+      expectMsgPF() { case SnapshotOffer(SnapshotMetadata(`persistenceId`, _, _), _) => }
       expectMsg(RecoveryCompleted)
     }
 

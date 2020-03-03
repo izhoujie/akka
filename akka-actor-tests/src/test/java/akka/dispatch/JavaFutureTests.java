@@ -1,3 +1,7 @@
+/*
+ * Copyright (C) 2018-2020 Lightbend Inc. <https://www.lightbend.com>
+ */
+
 package akka.dispatch;
 
 import akka.testkit.AkkaJUnitActorSystemResource;
@@ -5,6 +9,7 @@ import akka.actor.ActorSystem;
 
 import akka.japi.*;
 import org.junit.ClassRule;
+import org.scalatestplus.junit.JUnitSuite;
 import scala.concurrent.Await;
 import scala.concurrent.Future;
 import scala.concurrent.Promise;
@@ -22,7 +27,7 @@ import static akka.japi.Util.classTag;
 
 import akka.testkit.AkkaSpec;
 
-public class JavaFutureTests {
+public class JavaFutureTests extends JUnitSuite {
 
   @ClassRule
   public static AkkaJUnitActorSystemResource actorSystemResource =
@@ -54,15 +59,15 @@ public class JavaFutureTests {
     final CountDownLatch latch = new CountDownLatch(1);
     Promise<String> cf = Futures.promise();
     Future<String> f = cf.future();
-    f.onSuccess(new OnSuccess<String>() {
-      public void onSuccess(String result) {
-        if (result.equals("foo"))
+    f.onComplete(new OnComplete<String>() {
+      public void onComplete(Throwable t, String r) {
+        if ("foo".equals(r))
           latch.countDown();
       }
     }, system.dispatcher());
 
     cf.success("foo");
-    assertTrue(latch.await(5000, TimeUnit.MILLISECONDS));
+    assertTrue(latch.await(5, TimeUnit.SECONDS));
     assertEquals(Await.result(f, timeout), "foo");
   }
 
@@ -71,8 +76,9 @@ public class JavaFutureTests {
     final CountDownLatch latch = new CountDownLatch(1);
     Promise<String> cf = Futures.promise();
     Future<String> f = cf.future();
-    f.onFailure(new OnFailure() {
-      public void onFailure(Throwable t) {
+    f.onComplete(new OnComplete<String>() {
+      public void onComplete(Throwable t, String r) {
+        // 'null instanceof ...' is always false
         if (t instanceof NullPointerException)
           latch.countDown();
       }
@@ -80,7 +86,7 @@ public class JavaFutureTests {
 
     Throwable exception = new NullPointerException();
     cf.failure(exception);
-    assertTrue(latch.await(5000, TimeUnit.MILLISECONDS));
+    assertTrue(latch.await(5, TimeUnit.SECONDS));
     assertEquals(f.value().get().failed().get(), exception);
   }
 
@@ -96,7 +102,7 @@ public class JavaFutureTests {
     }, system.dispatcher());
 
     cf.success("foo");
-    assertTrue(latch.await(5000, TimeUnit.MILLISECONDS));
+    assertTrue(latch.await(5, TimeUnit.SECONDS));
     assertEquals(Await.result(f, timeout), "foo");
   }
 
@@ -112,7 +118,7 @@ public class JavaFutureTests {
     },system.dispatcher());
 
     cf.success("foo");
-    assertTrue(latch.await(5000, TimeUnit.MILLISECONDS));
+    assertTrue(latch.await(5, TimeUnit.SECONDS));
     assertEquals(Await.result(f, timeout), "foo");
   }
 
@@ -134,7 +140,7 @@ public class JavaFutureTests {
 
     assertEquals(Await.result(f, timeout), "1000");
     assertEquals(Await.result(r, timeout).intValue(), 1000);
-    assertTrue(latch.await(5000, TimeUnit.MILLISECONDS));
+    assertTrue(latch.await(5, TimeUnit.SECONDS));
   }
 
   @Test
@@ -150,7 +156,7 @@ public class JavaFutureTests {
     }), system.dispatcher());
 
     cf.success("foo");
-    assertTrue(latch.await(5000, TimeUnit.MILLISECONDS));
+    assertTrue(latch.await(5, TimeUnit.SECONDS));
     assertEquals(Await.result(f, timeout), "foo");
     assertEquals(Await.result(r, timeout), "foo");
   }

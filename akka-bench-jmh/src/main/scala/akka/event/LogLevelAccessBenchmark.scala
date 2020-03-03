@@ -1,6 +1,7 @@
-/**
- * Copyright (C) 2014-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2014-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.event
 
 import java.util.concurrent.TimeUnit

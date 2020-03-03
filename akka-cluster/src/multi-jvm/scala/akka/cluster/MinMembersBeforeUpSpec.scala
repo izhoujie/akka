@@ -1,29 +1,40 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.cluster
 
 import com.typesafe.config.ConfigFactory
-import org.scalatest.BeforeAndAfter
-import scala.collection.immutable.SortedSet
-import scala.concurrent.duration._
 import akka.remote.testconductor.RoleName
 import akka.remote.testkit.MultiNodeConfig
 import akka.remote.testkit.MultiNodeSpec
 import akka.testkit._
-import java.util.concurrent.atomic.AtomicReference
-import akka.actor.Props
-import akka.actor.Actor
 import akka.cluster.MemberStatus._
+import akka.util.ccompat._
 
+@ccompatUsedUntil213
 object MinMembersBeforeUpMultiJvmSpec extends MultiNodeConfig {
   val first = role("first")
   val second = role("second")
   val third = role("third")
 
-  commonConfig(debugConfig(on = false).withFallback(ConfigFactory.parseString(
-    "akka.cluster.min-nr-of-members = 3")).
-    withFallback(MultiNodeClusterSpec.clusterConfigWithFailureDetectorPuppet))
+  commonConfig(
+    debugConfig(on = false)
+      .withFallback(ConfigFactory.parseString("akka.cluster.min-nr-of-members = 3"))
+      .withFallback(MultiNodeClusterSpec.clusterConfigWithFailureDetectorPuppet))
+}
+
+object MinMembersBeforeUpWithWeaklyUpMultiJvmSpec extends MultiNodeConfig {
+  val first = role("first")
+  val second = role("second")
+  val third = role("third")
+
+  commonConfig(
+    debugConfig(on = false)
+      .withFallback(ConfigFactory.parseString("""
+      akka.cluster.min-nr-of-members = 3
+      akka.cluster.allow-weakly-up-members = on"""))
+      .withFallback(MultiNodeClusterSpec.clusterConfigWithFailureDetectorPuppet))
 }
 
 object MinMembersOfRoleBeforeUpMultiJvmSpec extends MultiNodeConfig {
@@ -31,20 +42,23 @@ object MinMembersOfRoleBeforeUpMultiJvmSpec extends MultiNodeConfig {
   val second = role("second")
   val third = role("third")
 
-  commonConfig(debugConfig(on = false).withFallback(ConfigFactory.parseString(
-    "akka.cluster.role.backend.min-nr-of-members = 2")).
-    withFallback(MultiNodeClusterSpec.clusterConfigWithFailureDetectorPuppet))
+  commonConfig(
+    debugConfig(on = false)
+      .withFallback(ConfigFactory.parseString("akka.cluster.role.backend.min-nr-of-members = 2"))
+      .withFallback(MultiNodeClusterSpec.clusterConfigWithFailureDetectorPuppet))
 
-  nodeConfig(first)(
-    ConfigFactory.parseString("akka.cluster.roles =[frontend]"))
+  nodeConfig(first)(ConfigFactory.parseString("akka.cluster.roles =[frontend]"))
 
-  nodeConfig(second, third)(
-    ConfigFactory.parseString("akka.cluster.roles =[backend]"))
+  nodeConfig(second, third)(ConfigFactory.parseString("akka.cluster.roles =[backend]"))
 }
 
 class MinMembersBeforeUpMultiJvmNode1 extends MinMembersBeforeUpSpec
 class MinMembersBeforeUpMultiJvmNode2 extends MinMembersBeforeUpSpec
 class MinMembersBeforeUpMultiJvmNode3 extends MinMembersBeforeUpSpec
+
+class MinMembersBeforeUpWithWeaklyUpMultiJvmNode1 extends MinMembersBeforeUpSpec
+class MinMembersBeforeUpWithWeaklyUpMultiJvmNode2 extends MinMembersBeforeUpSpec
+class MinMembersBeforeUpWithWeaklyUpMultiJvmNode3 extends MinMembersBeforeUpSpec
 
 class MinMembersOfRoleBeforeUpMultiJvmNode1 extends MinMembersOfRoleBeforeUpSpec
 class MinMembersOfRoleBeforeUpMultiJvmNode2 extends MinMembersOfRoleBeforeUpSpec
@@ -58,6 +72,19 @@ abstract class MinMembersBeforeUpSpec extends MinMembersBeforeUpBase(MinMembersB
 
   "Cluster leader" must {
     "wait with moving members to UP until minimum number of members have joined" taggedAs LongRunningTest in {
+      testWaitMovingMembersToUp()
+    }
+  }
+}
+
+abstract class MinMembersBeforeUpWithWeaklyUpSpec extends MinMembersBeforeUpBase(MinMembersBeforeUpMultiJvmSpec) {
+
+  override def first: RoleName = MinMembersBeforeUpWithWeaklyUpMultiJvmSpec.first
+  override def second: RoleName = MinMembersBeforeUpWithWeaklyUpMultiJvmSpec.second
+  override def third: RoleName = MinMembersBeforeUpWithWeaklyUpMultiJvmSpec.third
+
+  "Cluster leader" must {
+    "wait with moving members to UP until minimum number of members have joined with weakly up enabled" taggedAs LongRunningTest in {
       testWaitMovingMembersToUp()
     }
   }
@@ -77,10 +104,8 @@ abstract class MinMembersOfRoleBeforeUpSpec extends MinMembersBeforeUpBase(MinMe
 }
 
 abstract class MinMembersBeforeUpBase(multiNodeConfig: MultiNodeConfig)
-  extends MultiNodeSpec(multiNodeConfig)
-  with MultiNodeClusterSpec {
-
-  import ClusterEvent._
+    extends MultiNodeSpec(multiNodeConfig)
+    with MultiNodeClusterSpec {
 
   def first: RoleName
   def second: RoleName
@@ -91,9 +116,8 @@ abstract class MinMembersBeforeUpBase(multiNodeConfig: MultiNodeConfig)
     cluster.registerOnMemberUp(onUpLatch.countDown())
 
     runOn(first) {
-      cluster join myself
+      cluster.join(myself)
       awaitAssert {
-        clusterView.refreshCurrentState()
         clusterView.status should ===(Joining)
       }
     }
@@ -105,17 +129,16 @@ abstract class MinMembersBeforeUpBase(multiNodeConfig: MultiNodeConfig)
       cluster.join(first)
     }
     runOn(first, second) {
-      val expectedAddresses = Set(first, second) map address
+      val expectedAddresses = Set(first, second).map(address)
       awaitAssert {
-        clusterView.refreshCurrentState()
         clusterView.members.map(_.address) should ===(expectedAddresses)
       }
-      clusterView.members.map(_.status) should ===(Set(Joining))
+      clusterView.members.unsorted.map(_.status) should ===(Set(Joining))
       // and it should not change
-      1 to 5 foreach { _ ⇒
+      (1 to 5).foreach { _ =>
         Thread.sleep(1000)
         clusterView.members.map(_.address) should ===(expectedAddresses)
-        clusterView.members.map(_.status) should ===(Set(Joining))
+        clusterView.members.unsorted.map(_.status) should ===(Set(Joining))
       }
     }
     enterBarrier("second-joined")

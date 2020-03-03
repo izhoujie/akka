@@ -1,6 +1,7 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.cluster
 
 import scala.concurrent.duration._
@@ -17,12 +18,14 @@ object LeaderDowningAllOtherNodesMultiJvmSpec extends MultiNodeConfig {
   val fifth = role("fifth")
   val sixth = role("sixth")
 
-  commonConfig(debugConfig(on = false).withFallback(
-    ConfigFactory.parseString("""
+  commonConfig(
+    debugConfig(on = false)
+      .withFallback(ConfigFactory.parseString("""
       akka.cluster.failure-detector.monitored-by-nr-of-members = 2
-      akka.cluster.auto-down-unreachable-after = 1s
-      """)).
-    withFallback(MultiNodeClusterSpec.clusterConfig))
+      akka.cluster.downing-provider-class = akka.cluster.testkit.AutoDowning
+      akka.cluster.testkit.auto-down-unreachable-after = 1s
+      """))
+      .withFallback(MultiNodeClusterSpec.clusterConfig))
 }
 
 class LeaderDowningAllOtherNodesMultiJvmNode1 extends LeaderDowningAllOtherNodesSpec
@@ -33,11 +36,10 @@ class LeaderDowningAllOtherNodesMultiJvmNode5 extends LeaderDowningAllOtherNodes
 class LeaderDowningAllOtherNodesMultiJvmNode6 extends LeaderDowningAllOtherNodesSpec
 
 abstract class LeaderDowningAllOtherNodesSpec
-  extends MultiNodeSpec(LeaderDowningAllOtherNodesMultiJvmSpec)
-  with MultiNodeClusterSpec {
+    extends MultiNodeSpec(LeaderDowningAllOtherNodesMultiJvmSpec)
+    with MultiNodeClusterSpec {
 
   import LeaderDowningAllOtherNodesMultiJvmSpec._
-  import ClusterEvent._
 
   "A cluster of 6 nodes with monitored-by-nr-of-members=2" must {
     "setup" taggedAs LongRunningTest in {
@@ -49,8 +51,9 @@ abstract class LeaderDowningAllOtherNodesSpec
     "remove all shutdown nodes" taggedAs LongRunningTest in {
       val others = roles.drop(1)
       val shutdownAddresses = others.map(address).toSet
+      enterBarrier("before-all-other-shutdown")
       runOn(first) {
-        for (node ← others)
+        for (node <- others)
           testConductor.exit(node, 0).await
       }
       enterBarrier("all-other-shutdown")

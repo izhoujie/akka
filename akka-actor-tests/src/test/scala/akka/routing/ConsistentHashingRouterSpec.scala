@@ -1,6 +1,7 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.routing
 
 import scala.concurrent.Await
@@ -17,6 +18,10 @@ import akka.testkit._
 object ConsistentHashingRouterSpec {
 
   val config = """
+    akka.actor {
+      # consistent hashing is serializing the hash key, unless it's bytes or string
+      allow-java-serialization = on
+    }
     akka.actor.deployment {
       /router1 {
         router = consistent-hashing-pool
@@ -32,8 +37,8 @@ object ConsistentHashingRouterSpec {
 
   class Echo extends Actor {
     def receive = {
-      case x: ConsistentHashableEnvelope ⇒ sender() ! s"Unexpected envelope: $x"
-      case _                             ⇒ sender() ! self
+      case x: ConsistentHashableEnvelope => sender() ! s"Unexpected envelope: $x"
+      case _                             => sender() ! self
     }
   }
 
@@ -46,8 +51,10 @@ object ConsistentHashingRouterSpec {
   final case class Msg2(key: Any, data: String)
 }
 
-@org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
-class ConsistentHashingRouterSpec extends AkkaSpec(ConsistentHashingRouterSpec.config) with DefaultTimeout with ImplicitSender {
+class ConsistentHashingRouterSpec
+    extends AkkaSpec(ConsistentHashingRouterSpec.config)
+    with DefaultTimeout
+    with ImplicitSender {
   import ConsistentHashingRouterSpec._
   implicit val ec = system.dispatcher
 
@@ -78,10 +85,12 @@ class ConsistentHashingRouterSpec extends AkkaSpec(ConsistentHashingRouterSpec.c
 
     "select destination with defined hashMapping" in {
       def hashMapping: ConsistentHashMapping = {
-        case Msg2(key, data) ⇒ key
+        case Msg2(key, _) => key
       }
-      val router2 = system.actorOf(ConsistentHashingPool(nrOfInstances = 1, hashMapping = hashMapping).
-        props(Props[Echo]), "router2")
+      val router2 =
+        system.actorOf(
+          ConsistentHashingPool(nrOfInstances = 1, hashMapping = hashMapping).props(Props[Echo]),
+          "router2")
 
       router2 ! Msg2("a", "A")
       val destinationA = expectMsgType[ActorRef]

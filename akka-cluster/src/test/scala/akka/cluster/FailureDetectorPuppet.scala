@@ -1,19 +1,20 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.cluster
 
 import java.util.concurrent.atomic.AtomicReference
-import akka.remote.testkit.MultiNodeConfig
+
 import akka.remote.FailureDetector
 import com.typesafe.config.Config
 import akka.event.EventStream
+import akka.util.unused
 
 /**
  * User controllable "puppet" failure detector.
  */
-class FailureDetectorPuppet(config: Config, ev: EventStream) extends FailureDetector {
+class FailureDetectorPuppet(@unused config: Config, @unused ev: EventStream) extends FailureDetector {
 
   trait Status
   object Up extends Status
@@ -27,8 +28,8 @@ class FailureDetectorPuppet(config: Config, ev: EventStream) extends FailureDete
   def markNodeAsAvailable(): Unit = status.set(Up)
 
   override def isAvailable: Boolean = status.get match {
-    case Unknown | Up ⇒ true
-    case Down         ⇒ false
+    case Unknown | Up => true
+    case Down         => false
   }
 
   override def isMonitoring: Boolean = status.get != Unknown
@@ -36,4 +37,3 @@ class FailureDetectorPuppet(config: Config, ev: EventStream) extends FailureDete
   override def heartbeat(): Unit = status.compareAndSet(Unknown, Up)
 
 }
-

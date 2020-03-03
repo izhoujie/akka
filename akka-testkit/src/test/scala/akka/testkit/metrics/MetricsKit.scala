@@ -1,18 +1,18 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.testkit.metrics
 
 import com.codahale.metrics._
 
-import java.net.InetSocketAddress
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration._
 import com.typesafe.config.Config
 import java.util
 import scala.util.matching.Regex
 import scala.collection.mutable
-import akka.testkit.metrics.reporter.{ GraphiteClient, AkkaGraphiteReporter, AkkaConsoleReporter }
+import akka.testkit.metrics.reporter.AkkaConsoleReporter
 import org.scalatest.Notifying
 import scala.reflect.ClassTag
 
@@ -23,14 +23,13 @@ import scala.reflect.ClassTag
  * please refer to <a href="http://openjdk.java.net/projects/code-tools/jmh/">JMH</a> if that's what you're writing.
  * This trait instead aims to give an high level overview as well as data for trend-analysis of long running tests.
  *
- * Reporting defaults to [[ConsoleReporter]].
- * In order to send registry to Graphite run sbt with the following property: `-Dakka.registry.reporting.0=graphite`.
+ * Reporting defaults to `ConsoleReporter`.
  */
 private[akka] trait MetricsKit extends MetricsKitOps {
-  this: Notifying ⇒
+  this: Notifying =>
 
   import MetricsKit._
-  import collection.JavaConverters._
+  import akka.util.ccompat.JavaConverters._
 
   private var reporters: List[ScheduledReporter] = Nil
 
@@ -47,10 +46,10 @@ private[akka] trait MetricsKit extends MetricsKitOps {
 
   initMetricReporters()
 
-  def initMetricReporters() {
+  def initMetricReporters(): Unit = {
     val settings = new MetricsKitSettings(metricsConfig)
 
-    def configureConsoleReporter() {
+    def configureConsoleReporter(): Unit = {
       if (settings.Reporters.contains("console")) {
         val akkaConsoleReporter = new AkkaConsoleReporter(registry, settings.ConsoleReporter.Verbose)
 
@@ -61,30 +60,14 @@ private[akka] trait MetricsKit extends MetricsKitOps {
       }
     }
 
-    def configureGraphiteReporter() {
-      if (settings.Reporters.contains("graphite")) {
-        note(s"MetricsKit: Graphite reporter enabled, sending metrics to: ${settings.GraphiteReporter.Host}:${settings.GraphiteReporter.Port}")
-        val address = new InetSocketAddress(settings.GraphiteReporter.Host, settings.GraphiteReporter.Port)
-        val graphite = new GraphiteClient(address)
-        val akkaGraphiteReporter = new AkkaGraphiteReporter(registry, settings.GraphiteReporter.Prefix, graphite, settings.GraphiteReporter.Verbose)
-
-        if (settings.GraphiteReporter.ScheduledReportInterval > Duration.Zero) {
-          akkaGraphiteReporter.start(settings.GraphiteReporter.ScheduledReportInterval.toMillis, TimeUnit.MILLISECONDS)
-        }
-
-        reporters ::= akkaGraphiteReporter
-      }
-    }
-
     configureConsoleReporter()
-    configureGraphiteReporter()
   }
 
   /**
    * Schedule metric reports execution iterval. Should not be used multiple times
    */
-  def scheduleMetricReports(every: FiniteDuration) {
-    reporters foreach { _.start(every.toMillis, TimeUnit.MILLISECONDS) }
+  def scheduleMetricReports(every: FiniteDuration): Unit = {
+    reporters.foreach { _.start(every.toMillis, TimeUnit.MILLISECONDS) }
   }
 
   def registeredMetrics = registry.getMetrics.asScala
@@ -95,18 +78,21 @@ private[akka] trait MetricsKit extends MetricsKitOps {
    *
    * HINT: this operation can be costy, run outside of your tested code, or rely on scheduled reporting.
    */
-  def reportAndClearMetrics() {
+  def reportAndClearMetrics(): Unit = {
     reportMetrics()
     clearMetrics()
   }
+
+  def reportMetricsEnabled: Boolean = true
 
   /**
    * Causes immediate flush of metrics, using all registered reporters.
    *
    * HINT: this operation can be costy, run outside of your tested code, or rely on scheduled reporting.
    */
-  def reportMetrics() {
-    reporters foreach { _.report() }
+  def reportMetrics(): Unit = {
+    if (reportMetricsEnabled)
+      reporters.foreach { _.report() }
   }
 
   /**
@@ -114,10 +100,10 @@ private[akka] trait MetricsKit extends MetricsKitOps {
    *
    * HINT: this operation can be costy, run outside of your tested code, or rely on scheduled reporting.
    */
-  def reportMemoryMetrics() {
+  def reportMemoryMetrics(): Unit = {
     val gauges = registry.getGauges(MemMetricsFilter)
 
-    reporters foreach { _.report(gauges, empty, empty, empty, empty) }
+    reporters.foreach { _.report(gauges, empty, empty, empty, empty) }
   }
 
   /**
@@ -125,10 +111,10 @@ private[akka] trait MetricsKit extends MetricsKitOps {
    *
    * HINT: this operation can be costy, run outside of your tested code, or rely on scheduled reporting.
    */
-  def reportGcMetrics() {
+  def reportGcMetrics(): Unit = {
     val gauges = registry.getGauges(GcMetricsFilter)
 
-    reporters foreach { _.report(gauges, empty, empty, empty, empty) }
+    reporters.foreach { _.report(gauges, empty, empty, empty, empty) }
   }
 
   /**
@@ -136,10 +122,10 @@ private[akka] trait MetricsKit extends MetricsKitOps {
    *
    * HINT: this operation can be costy, run outside of your tested code, or rely on scheduled reporting.
    */
-  def reportFileDescriptorMetrics() {
+  def reportFileDescriptorMetrics(): Unit = {
     val gauges = registry.getGauges(FileDescriptorMetricsFilter)
 
-    reporters foreach { _.report(gauges, empty, empty, empty, empty) }
+    reporters.foreach { _.report(gauges, empty, empty, empty, empty) }
   }
 
   /**
@@ -150,23 +136,26 @@ private[akka] trait MetricsKit extends MetricsKitOps {
    * Please note that, if you have registered a `timer("thing")` previously, you will need to call `timer("thing")` again,
    * in order to register a new timer.
    */
-  def clearMetrics(matching: MetricFilter = MetricFilter.ALL) {
+  def clearMetrics(matching: MetricFilter = MetricFilter.ALL): Unit = {
     registry.removeMatching(matching)
   }
 
   /**
    * MUST be called after all tests have finished.
    */
-  def shutdownMetrics() {
-    reporters foreach { _.stop() }
+  def shutdownMetrics(): Unit = {
+    reporters.foreach { _.stop() }
   }
 
-  private[metrics] def getOrRegister[M <: Metric](key: String, metric: ⇒ M)(implicit tag: ClassTag[M]): M = {
-    import collection.JavaConverters._
+  private[metrics] def getOrRegister[M <: Metric](key: String, metric: => M)(implicit tag: ClassTag[M]): M = {
+    import akka.util.ccompat.JavaConverters._
     registry.getMetrics.asScala.find(_._1 == key).map(_._2) match {
-      case Some(existing: M) ⇒ existing
-      case Some(existing)    ⇒ throw new IllegalArgumentException("Key: [%s] is already for different kind of metric! Was [%s], expected [%s]".format(key, metric.getClass.getSimpleName, tag.runtimeClass.getSimpleName))
-      case _                 ⇒ registry.register(key, metric)
+      case Some(existing: M) => existing
+      case Some(_) =>
+        throw new IllegalArgumentException(
+          "Key: [%s] is already for different kind of metric! Was [%s], expected [%s]"
+            .format(key, metric.getClass.getSimpleName, tag.runtimeClass.getSimpleName))
+      case _ => registry.register(key, metric)
     }
   }
 
@@ -195,18 +184,18 @@ private[akka] object MetricsKit {
   }
 }
 
-/** Provides access to custom Akka [[Metric]]s, with named methods. */
+/** Provides access to custom Akka `com.codahale.metrics.Metric`, with named methods. */
 trait AkkaMetricRegistry {
-  this: MetricRegistry ⇒
+  this: MetricRegistry =>
 
   def getKnownOpsInTimespanCounters = filterFor(classOf[KnownOpsInTimespanTimer])
   def getHdrHistograms = filterFor(classOf[HdrHistogram])
   def getAveragingGauges = filterFor(classOf[AveragingGauge])
 
-  import collection.JavaConverters._
+  import akka.util.ccompat.JavaConverters._
   private def filterFor[T](clazz: Class[T]): mutable.Iterable[(String, T)] =
     for {
-      (key, metric) ← getMetrics.asScala
+      (key, metric) <- getMetrics.asScala
       if clazz.isInstance(metric)
     } yield key -> metric.asInstanceOf[T]
 }
@@ -217,17 +206,9 @@ private[akka] class MetricsKitSettings(config: Config) {
 
   val Reporters = config.getStringList("akka.test.metrics.reporters")
 
-  object GraphiteReporter {
-    val Prefix = config.getString("akka.test.metrics.reporter.graphite.prefix")
-    lazy val Host = config.getString("akka.test.metrics.reporter.graphite.host").requiring(v ⇒ !v.trim.isEmpty, "akka.test.metrics.reporter.graphite.host was used but was empty!")
-    val Port = config.getInt("akka.test.metrics.reporter.graphite.port")
-    val Verbose = config.getBoolean("akka.test.metrics.reporter.graphite.verbose")
-
-    val ScheduledReportInterval = config.getMillisDuration("akka.test.metrics.reporter.graphite.scheduled-report-interval")
-  }
-
   object ConsoleReporter {
-    val ScheduledReportInterval = config.getMillisDuration("akka.test.metrics.reporter.console.scheduled-report-interval")
+    val ScheduledReportInterval =
+      config.getMillisDuration("akka.test.metrics.reporter.console.scheduled-report-interval")
     val Verbose = config.getBoolean("akka.test.metrics.reporter.console.verbose")
   }
 

@@ -1,6 +1,7 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.remote
 
 import scala.concurrent.duration._
@@ -11,33 +12,51 @@ import akka.actor.Identify
 import akka.actor.Props
 import akka.remote.transport.ThrottlerTransportAdapter.Direction
 import akka.testkit._
-import testkit.{ STMultiNodeSpec, MultiNodeConfig, MultiNodeSpec }
+import testkit.MultiNodeConfig
 import akka.actor.PoisonPill
+import com.typesafe.config.ConfigFactory
 
-object AttemptSysMsgRedeliveryMultiJvmSpec extends MultiNodeConfig {
+class AttemptSysMsgRedeliveryMultiJvmSpec(artery: Boolean) extends MultiNodeConfig {
 
   val first = role("first")
   val second = role("second")
   val third = role("third")
 
-  commonConfig(debugConfig(on = false))
+  commonConfig(debugConfig(on = false).withFallback(ConfigFactory.parseString(s"""
+      akka.remote.artery.enabled = $artery
+      akka.remote.use-unsafe-remote-features-outside-cluster = on
+      """)).withFallback(RemotingMultiNodeSpec.commonConfig))
 
   testTransport(on = true)
 
+}
+
+class AttemptSysMsgRedeliveryMultiJvmNode1
+    extends AttemptSysMsgRedeliverySpec(new AttemptSysMsgRedeliveryMultiJvmSpec(artery = false))
+class AttemptSysMsgRedeliveryMultiJvmNode2
+    extends AttemptSysMsgRedeliverySpec(new AttemptSysMsgRedeliveryMultiJvmSpec(artery = false))
+class AttemptSysMsgRedeliveryMultiJvmNode3
+    extends AttemptSysMsgRedeliverySpec(new AttemptSysMsgRedeliveryMultiJvmSpec(artery = false))
+
+class ArteryAttemptSysMsgRedeliveryMultiJvmNode1
+    extends AttemptSysMsgRedeliverySpec(new AttemptSysMsgRedeliveryMultiJvmSpec(artery = true))
+class ArteryAttemptSysMsgRedeliveryMultiJvmNode2
+    extends AttemptSysMsgRedeliverySpec(new AttemptSysMsgRedeliveryMultiJvmSpec(artery = true))
+class ArteryAttemptSysMsgRedeliveryMultiJvmNode3
+    extends AttemptSysMsgRedeliverySpec(new AttemptSysMsgRedeliveryMultiJvmSpec(artery = true))
+
+object AttemptSysMsgRedeliverySpec {
   class Echo extends Actor {
     def receive = {
-      case m ⇒ sender ! m
+      case m => sender ! m
     }
   }
 }
 
-class AttemptSysMsgRedeliveryMultiJvmNode1 extends AttemptSysMsgRedeliverySpec
-class AttemptSysMsgRedeliveryMultiJvmNode2 extends AttemptSysMsgRedeliverySpec
-class AttemptSysMsgRedeliveryMultiJvmNode3 extends AttemptSysMsgRedeliverySpec
-
-class AttemptSysMsgRedeliverySpec extends MultiNodeSpec(AttemptSysMsgRedeliveryMultiJvmSpec)
-  with STMultiNodeSpec with ImplicitSender with DefaultTimeout {
-  import AttemptSysMsgRedeliveryMultiJvmSpec._
+abstract class AttemptSysMsgRedeliverySpec(multiNodeConfig: AttemptSysMsgRedeliveryMultiJvmSpec)
+    extends RemotingMultiNodeSpec(multiNodeConfig) {
+  import multiNodeConfig._
+  import AttemptSysMsgRedeliverySpec._
 
   def initialParticipants = roles.size
 

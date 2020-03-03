@@ -1,5 +1,5 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.dispatch
@@ -8,14 +8,13 @@ import akka.event.Logging.Error
 import akka.actor.ActorCell
 import akka.event.Logging
 import akka.dispatch.sysmsg.SystemMessage
-import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.{ ExecutorService, RejectedExecutionException }
-import scala.concurrent.forkjoin.ForkJoinPool
+
 import scala.concurrent.duration.Duration
-import scala.concurrent.Awaitable
 import scala.concurrent.duration.FiniteDuration
-import scala.annotation.tailrec
-import java.lang.reflect.ParameterizedType
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
+
+import com.github.ghik.silencer.silent
 
 /**
  * The event-based ``Dispatcher`` binds a set of Actors to a thread pool backed up by a
@@ -30,13 +29,13 @@ import java.lang.reflect.ParameterizedType
  *                   Larger values (or zero or negative) increase throughput, smaller values increase fairness
  */
 class Dispatcher(
-  _configurator: MessageDispatcherConfigurator,
-  val id: String,
-  val throughput: Int,
-  val throughputDeadlineTime: Duration,
-  executorServiceFactoryProvider: ExecutorServiceFactoryProvider,
-  val shutdownTimeout: FiniteDuration)
-  extends MessageDispatcher(_configurator) {
+    _configurator: MessageDispatcherConfigurator,
+    val id: String,
+    val throughput: Int,
+    val throughputDeadlineTime: Duration,
+    executorServiceFactoryProvider: ExecutorServiceFactoryProvider,
+    val shutdownTimeout: FiniteDuration)
+    extends MessageDispatcher(_configurator) {
 
   import configurator.prerequisites._
 
@@ -45,6 +44,11 @@ class Dispatcher(
     def copy(): LazyExecutorServiceDelegate = new LazyExecutorServiceDelegate(factory)
   }
 
+  /**
+   * At first glance this var does not seem to be updated anywhere, but in
+   * fact it is, via the esUpdater [[AtomicReferenceFieldUpdater]] below.
+   */
+  @silent("never updated")
   @volatile private var executorServiceDelegate: LazyExecutorServiceDelegate =
     new LazyExecutorServiceDelegate(executorServiceFactoryProvider.createExecutorServiceFactory(id, threadFactory))
 
@@ -71,15 +75,15 @@ class Dispatcher(
   /**
    * INTERNAL API
    */
-  protected[akka] def executeTask(invocation: TaskInvocation) {
+  protected[akka] def executeTask(invocation: TaskInvocation): Unit = {
     try {
-      executorService execute invocation
+      executorService.execute(invocation)
     } catch {
-      case e: RejectedExecutionException ⇒
+      case e: RejectedExecutionException =>
         try {
-          executorService execute invocation
+          executorService.execute(invocation)
         } catch {
-          case e2: RejectedExecutionException ⇒
+          case e2: RejectedExecutionException =>
             eventStream.publish(Error(e, getClass.getName, getClass, "executeTask was rejected twice!"))
             throw e2
         }
@@ -93,16 +97,17 @@ class Dispatcher(
     new Mailbox(mailboxType.create(Some(actor.self), Some(actor.system))) with DefaultSystemMessageQueue
   }
 
+  private val esUpdater = AtomicReferenceFieldUpdater.newUpdater(
+    classOf[Dispatcher],
+    classOf[LazyExecutorServiceDelegate],
+    "executorServiceDelegate")
+
   /**
    * INTERNAL API
    */
   protected[akka] def shutdown: Unit = {
     val newDelegate = executorServiceDelegate.copy() // Doesn't matter which one we copy
-    val es = synchronized {
-      val service = executorServiceDelegate
-      executorServiceDelegate = newDelegate // just a quick getAndSet
-      service
-    }
+    val es = esUpdater.getAndSet(this, newDelegate)
     es.shutdown()
   }
 
@@ -111,19 +116,22 @@ class Dispatcher(
    *
    * INTERNAL API
    */
-  protected[akka] override def registerForExecution(mbox: Mailbox, hasMessageHint: Boolean, hasSystemMessageHint: Boolean): Boolean = {
+  protected[akka] override def registerForExecution(
+      mbox: Mailbox,
+      hasMessageHint: Boolean,
+      hasSystemMessageHint: Boolean): Boolean = {
     if (mbox.canBeScheduledForExecution(hasMessageHint, hasSystemMessageHint)) { //This needs to be here to ensure thread safety and no races
       if (mbox.setAsScheduled()) {
         try {
-          executorService execute mbox
+          executorService.execute(mbox)
           true
         } catch {
-          case e: RejectedExecutionException ⇒
+          case _: RejectedExecutionException =>
             try {
-              executorService execute mbox
+              executorService.execute(mbox)
               true
             } catch { //Retry once
-              case e: RejectedExecutionException ⇒
+              case e: RejectedExecutionException =>
                 mbox.setAsIdle()
                 eventStream.publish(Error(e, getClass.getName, getClass, "registerForExecution was rejected twice!"))
                 throw e
@@ -137,10 +145,11 @@ class Dispatcher(
 }
 
 object PriorityGenerator {
+
   /**
    * Creates a PriorityGenerator that uses the supplied function as priority generator
    */
-  def apply(priorityFunction: Any ⇒ Int): PriorityGenerator = new PriorityGenerator {
+  def apply(priorityFunction: Any => Int): PriorityGenerator = new PriorityGenerator {
     def gen(message: Any): Int = priorityFunction(message)
   }
 }

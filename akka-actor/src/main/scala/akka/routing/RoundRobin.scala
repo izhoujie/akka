@@ -1,17 +1,18 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.routing
 
 import java.util.concurrent.atomic.AtomicLong
+
 import scala.collection.immutable
-import akka.actor.ActorContext
-import akka.actor.Props
 import akka.dispatch.Dispatchers
 import com.typesafe.config.Config
 import akka.actor.SupervisorStrategy
 import akka.japi.Util.immutableSeq
 import akka.actor.ActorSystem
+import com.github.ghik.silencer.silent
 
 object RoundRobinRoutingLogic {
   def apply(): RoundRobinRoutingLogic = new RoundRobinRoutingLogic
@@ -21,13 +22,17 @@ object RoundRobinRoutingLogic {
  * Uses round-robin to select a routee. For concurrent calls,
  * round robin is just a best effort.
  */
+@silent("@SerialVersionUID has no effect")
 @SerialVersionUID(1L)
 final class RoundRobinRoutingLogic extends RoutingLogic {
-  val next = new AtomicLong(0)
+  val next = new AtomicLong
 
   override def select(message: Any, routees: immutable.IndexedSeq[Routee]): Routee =
-    if (routees.isEmpty) NoRoutee
-    else routees((next.getAndIncrement % routees.size).asInstanceOf[Int])
+    if (routees.nonEmpty) {
+      val size = routees.size
+      val index = (next.getAndIncrement % size).asInstanceOf[Int]
+      routees(if (index < 0) size + index else index)
+    } else NoRoutee
 
 }
 
@@ -64,15 +69,18 @@ final class RoundRobinRoutingLogic extends RoutingLogic {
  */
 @SerialVersionUID(1L)
 final case class RoundRobinPool(
-  val nrOfInstances: Int, override val resizer: Option[Resizer] = None,
-  override val supervisorStrategy: SupervisorStrategy = Pool.defaultSupervisorStrategy,
-  override val routerDispatcher: String = Dispatchers.DefaultDispatcherId,
-  override val usePoolDispatcher: Boolean = false)
-  extends Pool with PoolOverrideUnsetConfig[RoundRobinPool] {
+    nrOfInstances: Int,
+    override val resizer: Option[Resizer] = None,
+    override val supervisorStrategy: SupervisorStrategy = Pool.defaultSupervisorStrategy,
+    override val routerDispatcher: String = Dispatchers.DefaultDispatcherId,
+    override val usePoolDispatcher: Boolean = false)
+    extends Pool
+    with PoolOverrideUnsetConfig[RoundRobinPool] {
 
   def this(config: Config) =
-    this(nrOfInstances = config.getInt("nr-of-instances"),
-      resizer = DefaultResizer.fromConfig(config),
+    this(
+      nrOfInstances = config.getInt("nr-of-instances"),
+      resizer = Resizer.fromConfig(config),
       usePoolDispatcher = config.hasPath("pool-dispatcher"))
 
   /**
@@ -102,7 +110,7 @@ final case class RoundRobinPool(
   def withDispatcher(dispatcherId: String): RoundRobinPool = copy(routerDispatcher = dispatcherId)
 
   /**
-   * Uses the resizer and/or the supervisor strategy of the given Routerconfig
+   * Uses the resizer and/or the supervisor strategy of the given RouterConfig
    * if this RouterConfig doesn't have one, i.e. the resizer defined in code is used if
    * resizer was not defined in config.
    */
@@ -126,9 +134,9 @@ final case class RoundRobinPool(
  */
 @SerialVersionUID(1L)
 final case class RoundRobinGroup(
-  override val paths: immutable.Iterable[String],
-  override val routerDispatcher: String = Dispatchers.DefaultDispatcherId)
-  extends Group {
+    paths: immutable.Iterable[String],
+    override val routerDispatcher: String = Dispatchers.DefaultDispatcherId)
+    extends Group {
 
   def this(config: Config) =
     this(paths = immutableSeq(config.getStringList("routees.paths")))
@@ -139,6 +147,8 @@ final case class RoundRobinGroup(
    *   sent with [[akka.actor.ActorSelection]] to these paths
    */
   def this(routeePaths: java.lang.Iterable[String]) = this(paths = immutableSeq(routeePaths))
+
+  override def paths(system: ActorSystem): immutable.Iterable[String] = this.paths
 
   override def createRouter(system: ActorSystem): Router = new Router(RoundRobinRoutingLogic())
 

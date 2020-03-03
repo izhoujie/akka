@@ -1,22 +1,21 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.actor
 
-import java.io.Closeable
-import java.util.concurrent.ThreadFactory
-import java.util.concurrent.atomic.{ AtomicLong, AtomicReference, AtomicReferenceArray }
+import java.util.concurrent.atomic.AtomicReference
+
 import scala.annotation.tailrec
-import scala.collection.immutable
-import scala.concurrent.{ Await, ExecutionContext, Future, Promise }
+
+import akka.util.JavaDurationConverters
+import com.github.ghik.silencer.silent
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
-import scala.util.control.{ NoStackTrace, NonFatal }
-import com.typesafe.config.Config
-import akka.event.LoggingAdapter
-import akka.util.Helpers
-import akka.util.Unsafe.{ instance ⇒ unsafe }
-import akka.dispatch.AbstractNodeQueue
+import scala.util.control.NoStackTrace
+
+import akka.annotation.InternalApi
+import com.github.ghik.silencer.silent
 
 /**
  * This exception is thrown by Scheduler.schedule* when scheduling is not
@@ -24,12 +23,21 @@ import akka.dispatch.AbstractNodeQueue
  */
 private final case class SchedulerException(msg: String) extends akka.AkkaException(msg) with NoStackTrace
 
-// The Scheduler trait is included in the documentation. KEEP THE LINES SHORT!!!
-//#scheduler
 /**
- * An Akka scheduler service. This one needs one special behavior: if
- * Closeable, it MUST execute all outstanding tasks upon .close() in order
- * to properly shutdown all dispatchers.
+ * An Akka scheduler service.
+ *
+ * For scheduling within actors `with Timers` should be preferred.
+ *
+ * Please note that this scheduler implementation is highly optimised for high-throughput
+ * and high-frequency events. It is not to be confused with long-term schedulers such as
+ * Quartz. The scheduler will throw an exception if attempts are made to schedule too far
+ * into the future (which by default is around 8 months (`Int.MaxValue` seconds).
+ *
+ * It's possible to implement a custom `Scheduler`, although that should rarely be needed.
+ *
+ * A `Scheduler` implementation needs one special behavior: if
+ * Closeable, it MUST execute all outstanding tasks that implement [[Scheduler.TaskRunOnClose]]
+ * upon .close() in order to properly shutdown all dispatchers.
  *
  * Furthermore, this timer service MUST throw IllegalStateException if it
  * cannot schedule a task. Once scheduled, the task MUST be executed. If
@@ -42,99 +50,455 @@ private final case class SchedulerException(msg: String) extends akka.AkkaExcept
  *  3) a java.util.concurrent.ThreadFactory
  */
 trait Scheduler {
+
   /**
-   * Schedules a message to be sent repeatedly with an initial delay and
-   * frequency. E.g. if you would like a message to be sent immediately and
-   * thereafter every 500ms you would set delay=Duration.Zero and
-   * interval=Duration(500, TimeUnit.MILLISECONDS)
+   * Scala API: Schedules a `Runnable` to be run repeatedly with an initial delay and
+   * a fixed `delay` between subsequent executions. E.g. if you would like the function to
+   * be run after 2 seconds and thereafter every 100ms you would set `delay=Duration(2, TimeUnit.SECONDS)`
+   * and `interval=Duration(100, TimeUnit.MILLISECONDS)`.
    *
-   * Java & Scala API
+   * It will not compensate the delay between tasks if the execution takes a long time or if
+   * scheduling is delayed longer than specified for some reason. The delay between subsequent
+   * execution will always be (at least) the given `delay`. In the long run, the
+   * frequency of execution will generally be slightly lower than the reciprocal of the specified
+   * `delay`.
+   *
+   * If the `Runnable` throws an exception the repeated scheduling is aborted,
+   * i.e. the function will not be invoked any more.
+   *
+   * @throws IllegalArgumentException if the given delays exceed the maximum
+   * reach (calculated as: `delay / tickNanos > Int.MaxValue`).
+   *
+   * Note: For scheduling within actors `with Timers` should be preferred.
    */
-  final def schedule(
-    initialDelay: FiniteDuration,
-    interval: FiniteDuration,
-    receiver: ActorRef,
-    message: Any)(implicit executor: ExecutionContext,
-                  sender: ActorRef = Actor.noSender): Cancellable =
-    schedule(initialDelay, interval, new Runnable {
-      def run = {
+  def scheduleWithFixedDelay(initialDelay: FiniteDuration, delay: FiniteDuration)(runnable: Runnable)(
+      implicit executor: ExecutionContext): Cancellable = {
+    try new AtomicReference[Cancellable](Cancellable.initialNotCancelled) with Cancellable { self =>
+      compareAndSet(
+        Cancellable.initialNotCancelled,
+        scheduleOnce(
+          initialDelay,
+          new Runnable {
+            override def run(): Unit = {
+              try {
+                runnable.run()
+                if (self.get != null)
+                  swap(scheduleOnce(delay, this))
+              } catch {
+                // ignore failure to enqueue or terminated target actor
+                case _: SchedulerException                                                                         =>
+                case e: IllegalStateException if e.getCause != null && e.getCause.isInstanceOf[SchedulerException] =>
+              }
+            }
+          }))
+
+      @tailrec private def swap(c: Cancellable): Unit = {
+        get match {
+          case null => if (c != null) c.cancel()
+          case old  => if (!compareAndSet(old, c)) swap(c)
+        }
+      }
+
+      @tailrec final def cancel(): Boolean = {
+        get match {
+          case null => false
+          case c =>
+            if (c.cancel()) compareAndSet(c, null)
+            else compareAndSet(c, null) || cancel()
+        }
+      }
+
+      override def isCancelled: Boolean = get == null
+    } catch {
+      case SchedulerException(msg) => throw new IllegalStateException(msg)
+    }
+  }
+
+  /**
+   * Java API: Schedules a `Runnable` to be run repeatedly with an initial delay and
+   * a fixed `delay` between subsequent executions. E.g. if you would like the function to
+   * be run after 2 seconds and thereafter every 100ms you would set delay to `Duration.ofSeconds(2)`,
+   * and interval to `Duration.ofMillis(100)`.
+   *
+   * It will not compensate the delay between tasks if the execution takes a long time or if
+   * scheduling is delayed longer than specified for some reason. The delay between subsequent
+   * execution will always be (at least) the given `delay`.
+   *
+   * In the long run, the frequency of tasks will generally be slightly lower than
+   * the reciprocal of the specified `delay`.
+   *
+   * If the `Runnable` throws an exception the repeated scheduling is aborted,
+   * i.e. the function will not be invoked any more.
+   *
+   * @throws IllegalArgumentException if the given delays exceed the maximum
+   * reach (calculated as: `delay / tickNanos > Int.MaxValue`).
+   *
+   * Note: For scheduling within actors `AbstractActorWithTimers` should be preferred.
+   */
+  final def scheduleWithFixedDelay(
+      initialDelay: java.time.Duration,
+      delay: java.time.Duration,
+      runnable: Runnable,
+      executor: ExecutionContext): Cancellable = {
+    import JavaDurationConverters._
+    scheduleWithFixedDelay(initialDelay.asScala, delay.asScala)(runnable)(executor)
+  }
+
+  /**
+   * Scala API: Schedules a message to be sent repeatedly with an initial delay and
+   * a fixed `delay` between messages. E.g. if you would like a message to be sent
+   * immediately and thereafter every 500ms you would set `delay=Duration.Zero` and
+   * `interval=Duration(500, TimeUnit.MILLISECONDS)`.
+   *
+   * It will not compensate the delay between messages if scheduling is delayed
+   * longer than specified for some reason. The delay between sending of subsequent
+   * messages will always be (at least) the given `delay`.
+   *
+   * In the long run, the frequency of messages will generally be slightly lower than
+   * the reciprocal of the specified `delay`.
+   *
+   * Note: For scheduling within actors `with Timers` should be preferred.
+   */
+  @silent("deprecated")
+  final def scheduleWithFixedDelay(
+      initialDelay: FiniteDuration,
+      delay: FiniteDuration,
+      receiver: ActorRef,
+      message: Any)(
+      implicit
+      executor: ExecutionContext,
+      sender: ActorRef = Actor.noSender): Cancellable = {
+    scheduleWithFixedDelay(initialDelay, delay)(new Runnable {
+      def run(): Unit = {
         receiver ! message
         if (receiver.isTerminated)
-          throw new SchedulerException("timer active for terminated actor")
+          throw SchedulerException("timer active for terminated actor")
       }
     })
+  }
 
   /**
-   * Schedules a function to be run repeatedly with an initial delay and a
-   * frequency. E.g. if you would like the function to be run after 2 seconds
-   * and thereafter every 100ms you would set delay = Duration(2, TimeUnit.SECONDS)
-   * and interval = Duration(100, TimeUnit.MILLISECONDS). If the execution of
-   * the function takes longer than the interval, the subsequent execution will
-   * start immediately after the prior one completes (there will be no overlap
-   * of the function executions). In such cases, the actual execution interval
-   * will differ from the interval passed to this method.
+   * Java API: Schedules a message to be sent repeatedly with an initial delay and
+   * a fixed `delay` between messages. E.g. if you would like a message to be sent
+   * immediately and thereafter every 500ms you would set `delay=Duration.ZERO` and
+   * `interval=Duration.ofMillis(500)`.
    *
-   * Scala API
+   * It will not compensate the delay between messages if scheduling is delayed
+   * longer than specified for some reason. The delay between sending of subsequent
+   * messages will always be (at least) the given `delay`.
+   *
+   * In the long run, the frequency of messages will generally be slightly lower than
+   * the reciprocal of the specified `delay`.
+   *
+   * Note: For scheduling within actors `AbstractActorWithTimers` should be preferred.
    */
-  final def schedule(
-    initialDelay: FiniteDuration,
-    interval: FiniteDuration)(f: ⇒ Unit)(
-      implicit executor: ExecutionContext): Cancellable =
-    schedule(initialDelay, interval, new Runnable { override def run = f })
+  final def scheduleWithFixedDelay(
+      initialDelay: java.time.Duration,
+      delay: java.time.Duration,
+      receiver: ActorRef,
+      message: Any,
+      executor: ExecutionContext,
+      sender: ActorRef): Cancellable = {
+    import JavaDurationConverters._
+    scheduleWithFixedDelay(initialDelay.asScala, delay.asScala, receiver, message)(executor, sender)
+  }
 
   /**
-   * Schedules a function to be run repeatedly with an initial delay and
+   * Scala API: Schedules a `Runnable` to be run repeatedly with an initial delay and
    * a frequency. E.g. if you would like the function to be run after 2
-   * seconds and thereafter every 100ms you would set delay = Duration(2,
-   * TimeUnit.SECONDS) and interval = Duration(100, TimeUnit.MILLISECONDS). If
-   * the execution of the runnable takes longer than the interval, the
-   * subsequent execution will start immediately after the prior one completes
-   * (there will be no overlap of executions of the runnable). In such cases,
-   * the actual execution interval will differ from the interval passed to this
-   * method.
+   * seconds and thereafter every 100ms you would set `delay=Duration(2, TimeUnit.SECONDS)`
+   * and `interval=Duration(100, TimeUnit.MILLISECONDS)`.
    *
+   * It will compensate the delay for a subsequent task if the previous tasks took
+   * too long to execute. In such cases, the actual execution interval will differ from
+   * the interval passed to the method.
    *
-   * Java API
+   * If the execution of the tasks takes longer than the `interval`, the subsequent
+   * execution will start immediately after the prior one completes (there will be
+   * no overlap of executions). This also has the consequence that after long garbage
+   * collection pauses or other reasons when the JVM was suspended all "missed" tasks
+   * will execute when the process wakes up again.
+   *
+   * In the long run, the frequency of execution will be exactly the reciprocal of the
+   * specified `interval`.
+   *
+   * Warning: `scheduleAtFixedRate` can result in bursts of scheduled tasks after long
+   * garbage collection pauses, which may in worst case cause undesired load on the system.
+   * Therefore `scheduleWithFixedDelay` is often preferred.
+   *
+   * If the `Runnable` throws an exception the repeated scheduling is aborted,
+   * i.e. the function will not be invoked any more.
+   *
+   * @throws IllegalArgumentException if the given delays exceed the maximum
+   * reach (calculated as: `delay / tickNanos > Int.MaxValue`).
+   *
+   * Note: For scheduling within actors `with Timers` should be preferred.
    */
-  def schedule(
-    initialDelay: FiniteDuration,
-    interval: FiniteDuration,
-    runnable: Runnable)(implicit executor: ExecutionContext): Cancellable
+  @silent("deprecated")
+  final def scheduleAtFixedRate(initialDelay: FiniteDuration, interval: FiniteDuration)(runnable: Runnable)(
+      implicit executor: ExecutionContext): Cancellable =
+    schedule(initialDelay, interval, runnable)(executor)
 
   /**
-   * Schedules a message to be sent once with a delay, i.e. a time period that has
+   * Java API: Schedules a `Runnable` to be run repeatedly with an initial delay and
+   * a frequency. E.g. if you would like the function to be run after 2
+   * seconds and thereafter every 100ms you would set delay to `Duration.ofSeconds(2)`,
+   * and interval to `Duration.ofMillis(100)`.
+   *
+   * It will compensate the delay for a subsequent task if the previous tasks took
+   * too long to execute. In such cases, the actual execution interval will differ from
+   * the interval passed to the method.
+   *
+   * If the execution of the tasks takes longer than the `interval`, the subsequent
+   * execution will start immediately after the prior one completes (there will be
+   * no overlap of executions). This also has the consequence that after long garbage
+   * collection pauses or other reasons when the JVM was suspended all "missed" tasks
+   * will execute when the process wakes up again.
+   *
+   * In the long run, the frequency of execution will be exactly the reciprocal of the
+   * specified `interval`.
+   *
+   * Warning: `scheduleAtFixedRate` can result in bursts of scheduled tasks after long
+   * garbage collection pauses, which may in worst case cause undesired load on the system.
+   * Therefore `scheduleWithFixedDelay` is often preferred.
+   *
+   * If the `Runnable` throws an exception the repeated scheduling is aborted,
+   * i.e. the function will not be invoked any more.
+   *
+   * @throws IllegalArgumentException if the given delays exceed the maximum
+   * reach (calculated as: `delay / tickNanos > Int.MaxValue`).
+   *
+   * Note: For scheduling within actors `AbstractActorWithTimers` should be preferred.
+   */
+  final def scheduleAtFixedRate(
+      initialDelay: java.time.Duration,
+      interval: java.time.Duration,
+      runnable: Runnable,
+      executor: ExecutionContext): Cancellable = {
+    import JavaDurationConverters._
+    scheduleAtFixedRate(initialDelay.asScala, interval.asScala)(runnable)(executor)
+  }
+
+  /**
+   * Scala API: Schedules a message to be sent repeatedly with an initial delay and
+   * frequency. E.g. if you would like a message to be sent immediately and
+   * thereafter every 500ms you would set `delay=Duration.Zero` and
+   * `interval=Duration(500, TimeUnit.MILLISECONDS)`
+   *
+   * It will compensate the delay for a subsequent message if the sending of previous
+   * message was delayed more than specified. In such cases, the actual message interval
+   * will differ from the interval passed to the method.
+   *
+   * If the execution is delayed longer than the `interval`, the subsequent message will
+   * be sent immediately after the prior one. This also has the consequence that after
+   * long garbage collection pauses or other reasons when the JVM was suspended all
+   * "missed" messages will be sent when the process wakes up again.
+   *
+   * In the long run, the frequency of messages will be exactly the reciprocal of the
+   * specified `interval`.
+   *
+   * Warning: `scheduleAtFixedRate` can result in bursts of scheduled messages after long
+   * garbage collection pauses, which may in worst case cause undesired load on the system.
+   * Therefore `scheduleWithFixedDelay` is often preferred.
+   *
+   * Note: For scheduling within actors `with Timers` should be preferred.
+   */
+  @silent("deprecated")
+  final def scheduleAtFixedRate(
+      initialDelay: FiniteDuration,
+      interval: FiniteDuration,
+      receiver: ActorRef,
+      message: Any)(
+      implicit
+      executor: ExecutionContext,
+      sender: ActorRef = Actor.noSender): Cancellable =
+    schedule(initialDelay, interval, receiver, message)
+
+  /**
+   * Java API: Schedules a message to be sent repeatedly with an initial delay and
+   * frequency. E.g. if you would like a message to be sent immediately and
+   * thereafter every 500ms you would set `delay=Duration.ZERO` and
+   * `interval=Duration.ofMillis(500)`
+   *
+   * It will compensate the delay for a subsequent message if the sending of previous
+   * message was delayed more than specified. In such cases, the actual message interval
+   * will differ from the interval passed to the method.
+   *
+   * If the execution is delayed longer than the `interval`, the subsequent message will
+   * be sent immediately after the prior one. This also has the consequence that after
+   * long garbage collection pauses or other reasons when the JVM was suspended all
+   * "missed" messages will be sent when the process wakes up again.
+   *
+   * In the long run, the frequency of messages will be exactly the reciprocal of the
+   * specified `interval`.
+   *
+   * Warning: `scheduleAtFixedRate` can result in bursts of scheduled messages after long
+   * garbage collection pauses, which may in worst case cause undesired load on the system.
+   * Therefore `scheduleWithFixedDelay` is often preferred.
+   *
+   * Note: For scheduling within actors `AbstractActorWithTimers` should be preferred.
+   */
+  final def scheduleAtFixedRate(
+      initialDelay: java.time.Duration,
+      interval: java.time.Duration,
+      receiver: ActorRef,
+      message: Any,
+      executor: ExecutionContext,
+      sender: ActorRef): Cancellable = {
+    import JavaDurationConverters._
+    scheduleAtFixedRate(initialDelay.asScala, interval.asScala, receiver, message)(executor, sender)
+  }
+
+  /**
+   * Deprecated API: See [[Scheduler#scheduleWithFixedDelay]] or [[Scheduler#scheduleAtFixedRate]].
+   */
+  @deprecated(
+    "Use scheduleWithFixedDelay or scheduleAtFixedRate instead. This has the same semantics as " +
+    "scheduleAtFixedRate, but scheduleWithFixedDelay is often preferred.",
+    since = "2.6.0")
+  @silent("deprecated")
+  final def schedule(initialDelay: FiniteDuration, interval: FiniteDuration, receiver: ActorRef, message: Any)(
+      implicit
+      executor: ExecutionContext,
+      sender: ActorRef = Actor.noSender): Cancellable =
+    schedule(
+      initialDelay,
+      interval,
+      new Runnable {
+        def run(): Unit = {
+          receiver ! message
+          if (receiver.isTerminated)
+            throw SchedulerException("timer active for terminated actor")
+        }
+      })
+
+  /**
+   * Deprecated API: See [[Scheduler#scheduleWithFixedDelay]] or [[Scheduler#scheduleAtFixedRate]].
+   */
+  @deprecated(
+    "Use scheduleWithFixedDelay or scheduleAtFixedRate instead. This has the same semantics as " +
+    "scheduleAtFixedRate, but scheduleWithFixedDelay is often preferred.",
+    since = "2.6.0")
+  final def schedule(
+      initialDelay: java.time.Duration,
+      interval: java.time.Duration,
+      receiver: ActorRef,
+      message: Any,
+      executor: ExecutionContext,
+      sender: ActorRef): Cancellable = {
+    import JavaDurationConverters._
+    schedule(initialDelay.asScala, interval.asScala, receiver, message)(executor, sender)
+  }
+
+  /**
+   * Deprecated API: See [[Scheduler#scheduleWithFixedDelay]] or [[Scheduler#scheduleAtFixedRate]].
+   */
+  @deprecated(
+    "Use scheduleWithFixedDelay or scheduleAtFixedRate instead. This has the same semantics as " +
+    "scheduleAtFixedRate, but scheduleWithFixedDelay is often preferred.",
+    since = "2.6.0")
+  final def schedule(initialDelay: FiniteDuration, interval: FiniteDuration)(f: => Unit)(
+      implicit
+      executor: ExecutionContext): Cancellable =
+    schedule(initialDelay, interval, new Runnable { override def run(): Unit = f })
+
+  /**
+   * Deprecated API: See [[Scheduler#scheduleWithFixedDelay]] or [[Scheduler#scheduleAtFixedRate]].
+   */
+  @deprecated(
+    "Use scheduleWithFixedDelay or scheduleAtFixedRate instead. This has the same semantics as " +
+    "scheduleAtFixedRate, but scheduleWithFixedDelay is often preferred.",
+    since = "2.6.0")
+  def schedule(initialDelay: FiniteDuration, interval: FiniteDuration, runnable: Runnable)(
+      implicit executor: ExecutionContext): Cancellable
+
+  /**
+   * Deprecated API: See [[Scheduler#scheduleWithFixedDelay]] or [[Scheduler#scheduleAtFixedRate]].
+   */
+  @deprecated(
+    "Use scheduleWithFixedDelay or scheduleAtFixedRate instead. This has the same semantics as " +
+    "scheduleAtFixedRate, but scheduleWithFixedDelay is often preferred.",
+    since = "2.6.0")
+  def schedule(initialDelay: java.time.Duration, interval: java.time.Duration, runnable: Runnable)(
+      implicit executor: ExecutionContext): Cancellable = {
+    import JavaDurationConverters._
+    schedule(initialDelay.asScala, interval.asScala, runnable)
+  }
+
+  /**
+   * Scala API: Schedules a message to be sent once with a delay, i.e. a time period that has
    * to pass before the message is sent.
    *
-   * Java & Scala API
+   * @throws IllegalArgumentException if the given delays exceed the maximum
+   * reach (calculated as: `delay / tickNanos > Int.MaxValue`).
+   *
+   * Note: For scheduling within actors `with Timers` should be preferred.
    */
-  final def scheduleOnce(
-    delay: FiniteDuration,
-    receiver: ActorRef,
-    message: Any)(implicit executor: ExecutionContext,
-                  sender: ActorRef = Actor.noSender): Cancellable =
+  final def scheduleOnce(delay: FiniteDuration, receiver: ActorRef, message: Any)(
+      implicit
+      executor: ExecutionContext,
+      sender: ActorRef = Actor.noSender): Cancellable =
     scheduleOnce(delay, new Runnable {
-      override def run = receiver ! message
+      override def run(): Unit = receiver ! message
     })
 
   /**
-   * Schedules a function to be run once with a delay, i.e. a time period that has
-   * to pass before the function is run.
+   * Java API: Schedules a message to be sent once with a delay, i.e. a time period that has
+   * to pass before the message is sent.
    *
-   * Scala API
+   * @throws IllegalArgumentException if the given delays exceed the maximum
+   * reach (calculated as: `delay / tickNanos > Int.MaxValue`).
+   *
+   * Note: For scheduling within actors `AbstractActorWithTimers` should be preferred.
    */
-  final def scheduleOnce(delay: FiniteDuration)(f: ⇒ Unit)(
-    implicit executor: ExecutionContext): Cancellable =
-    scheduleOnce(delay, new Runnable { override def run = f })
+  final def scheduleOnce(
+      delay: java.time.Duration,
+      receiver: ActorRef,
+      message: Any,
+      executor: ExecutionContext,
+      sender: ActorRef): Cancellable = {
+    import JavaDurationConverters._
+    scheduleOnce(delay.asScala, receiver, message)(executor, sender)
+  }
 
   /**
-   * Schedules a Runnable to be run once with a delay, i.e. a time period that
+   * Scala API: Schedules a function to be run once with a delay, i.e. a time period that has
+   * to pass before the function is run.
+   *
+   * @throws IllegalArgumentException if the given delays exceed the maximum
+   * reach (calculated as: `delay / tickNanos > Int.MaxValue`).
+   *
+   * Note: For scheduling within actors `with Timers` should be preferred.
+   */
+  final def scheduleOnce(delay: FiniteDuration)(f: => Unit)(
+      implicit
+      executor: ExecutionContext): Cancellable =
+    scheduleOnce(delay, new Runnable { override def run(): Unit = f })
+
+  /**
+   * Scala API: Schedules a Runnable to be run once with a delay, i.e. a time period that
    * has to pass before the runnable is executed.
    *
-   * Java & Scala API
+   * @throws IllegalArgumentException if the given delays exceed the maximum
+   * reach (calculated as: `delay / tickNanos > Int.MaxValue`).
+   *
+   * Note: For scheduling within actors `with Timers` should be preferred.
    */
-  def scheduleOnce(
-    delay: FiniteDuration,
-    runnable: Runnable)(implicit executor: ExecutionContext): Cancellable
+  def scheduleOnce(delay: FiniteDuration, runnable: Runnable)(implicit executor: ExecutionContext): Cancellable
+
+  /**
+   * Java API: Schedules a Runnable to be run once with a delay, i.e. a time period that
+   * has to pass before the runnable is executed.
+   *
+   * @throws IllegalArgumentException if the given delays exceed the maximum
+   * reach (calculated as: `delay / tickNanos > Int.MaxValue`).
+   *
+   * Note: For scheduling within actors `AbstractActorWithTimers` should be preferred.
+   */
+  def scheduleOnce(delay: java.time.Duration, runnable: Runnable)(implicit executor: ExecutionContext): Cancellable = {
+    import JavaDurationConverters._
+    scheduleOnce(delay.asScala, runnable)(executor)
+  }
 
   /**
    * The maximum supported task frequency of this scheduler, i.e. the inverse
@@ -143,18 +507,17 @@ trait Scheduler {
   def maxFrequency: Double
 
 }
-//#scheduler
 
 // this one is just here so we can present a nice AbstractScheduler for Java
 abstract class AbstractSchedulerBase extends Scheduler
 
-//#cancellable
 /**
  * Signifies something that can be cancelled
  * There is no strict guarantee that the implementation is thread-safe,
  * but it should be good practice to make it so.
  */
 trait Cancellable {
+
   /**
    * Cancels this Cancellable and returns true if that was successful.
    * If this cancellable was (concurrently) cancelled already, then this method
@@ -171,340 +534,29 @@ trait Cancellable {
    */
   def isCancelled: Boolean
 }
-//#cancellable
 
-/**
- * This scheduler implementation is based on a revolving wheel of buckets,
- * like Netty’s HashedWheelTimer, which it advances at a fixed tick rate and
- * dispatches tasks it finds in the current bucket to their respective
- * ExecutionContexts. The tasks are held in TaskHolders, which upon
- * cancellation null out their reference to the actual task, leaving only this
- * shell to be cleaned up when the wheel reaches that bucket next time. This
- * enables the use of a simple linked list to chain the TaskHolders off the
- * wheel.
- *
- * Also noteworthy is that this scheduler does not obtain a current time stamp
- * when scheduling single-shot tasks, instead it always rounds up the task
- * delay to a full multiple of the TickDuration. This means that tasks are
- * scheduled possibly one tick later than they could be (if checking that
- * “now() + delay <= nextTick” were done).
- */
-class LightArrayRevolverScheduler(config: Config,
-                                  log: LoggingAdapter,
-                                  threadFactory: ThreadFactory)
-  extends Scheduler with Closeable {
-
-  import Helpers.Requiring
-  import Helpers.ConfigOps
-
-  val WheelSize =
-    config.getInt("akka.scheduler.ticks-per-wheel")
-      .requiring(ticks ⇒ (ticks & (ticks - 1)) == 0, "ticks-per-wheel must be a power of 2")
-  val TickDuration =
-    config.getMillisDuration("akka.scheduler.tick-duration")
-      .requiring(_ >= 10.millis || !Helpers.isWindows, "minimum supported akka.scheduler.tick-duration on Windows is 10ms")
-      .requiring(_ >= 1.millis, "minimum supported akka.scheduler.tick-duration is 1ms")
-  val ShutdownTimeout = config.getMillisDuration("akka.scheduler.shutdown-timeout")
-
-  import LightArrayRevolverScheduler._
-
-  private val oneNs = Duration.fromNanos(1l)
-  private def roundUp(d: FiniteDuration): FiniteDuration =
-    try {
-      ((d + TickDuration - oneNs) / TickDuration).toLong * TickDuration
-    } catch {
-      case _: IllegalArgumentException ⇒ d // rouding up Long.MaxValue.nanos overflows
-    }
-
-  /**
-   * Clock implementation is replaceable (for testing); the implementation must
-   * return a monotonically increasing series of Long nanoseconds.
-   */
-  protected def clock(): Long = System.nanoTime
-
-  /**
-   * Overridable for tests
-   */
-  protected def getShutdownTimeout: FiniteDuration = ShutdownTimeout
-
-  /**
-   * Overridable for tests
-   */
-  protected def waitNanos(nanos: Long): Unit = {
-    // see http://www.javamex.com/tutorials/threads/sleep_issues.shtml
-    val sleepMs = if (Helpers.isWindows) (nanos + 4999999) / 10000000 * 10 else (nanos + 999999) / 1000000
-    try Thread.sleep(sleepMs) catch {
-      case _: InterruptedException ⇒ Thread.currentThread.interrupt() // we got woken up
-    }
-  }
-
-  override def schedule(initialDelay: FiniteDuration,
-                        delay: FiniteDuration,
-                        runnable: Runnable)(implicit executor: ExecutionContext): Cancellable = {
-    checkMaxDelay(roundUp(delay).toNanos)
-    val preparedEC = executor.prepare()
-    try new AtomicReference[Cancellable](InitialRepeatMarker) with Cancellable { self ⇒
-      compareAndSet(InitialRepeatMarker, schedule(
-        preparedEC,
-        new AtomicLong(clock() + initialDelay.toNanos) with Runnable {
-          override def run(): Unit = {
-            try {
-              runnable.run()
-              val driftNanos = clock() - getAndAdd(delay.toNanos)
-              if (self.get != null)
-                swap(schedule(preparedEC, this, Duration.fromNanos(Math.max(delay.toNanos - driftNanos, 1))))
-            } catch {
-              case _: SchedulerException ⇒ // ignore failure to enqueue or terminated target actor
-            }
-          }
-        }, roundUp(initialDelay)))
-
-      @tailrec private def swap(c: Cancellable): Unit = {
-        get match {
-          case null ⇒ if (c != null) c.cancel()
-          case old  ⇒ if (!compareAndSet(old, c)) swap(c)
-        }
-      }
-
-      @tailrec final def cancel(): Boolean = {
-        get match {
-          case null ⇒ false
-          case c ⇒
-            if (c.cancel()) compareAndSet(c, null)
-            else compareAndSet(c, null) || cancel()
-        }
-      }
-
-      override def isCancelled: Boolean = get == null
-    } catch {
-      case SchedulerException(msg) ⇒ throw new IllegalStateException(msg)
-    }
-  }
-
-  override def scheduleOnce(delay: FiniteDuration, runnable: Runnable)(implicit executor: ExecutionContext): Cancellable =
-    try schedule(executor.prepare(), runnable, roundUp(delay))
-    catch {
-      case SchedulerException(msg) ⇒ throw new IllegalStateException(msg)
-    }
-
-  override def close(): Unit = Await.result(stop(), getShutdownTimeout) foreach {
-    task ⇒
-      try task.run() catch {
-        case e: InterruptedException ⇒ throw e
-        case _: SchedulerException   ⇒ // ignore terminated actors
-        case NonFatal(e)             ⇒ log.error(e, "exception while executing timer task")
-      }
-  }
-
-  override val maxFrequency: Double = 1.second / TickDuration
-
-  /*
-   * BELOW IS THE ACTUAL TIMER IMPLEMENTATION
-   */
-
-  private val start = clock()
-  private val tickNanos = TickDuration.toNanos
-  private val wheelMask = WheelSize - 1
-  private val queue = new TaskQueue
-
-  private def schedule(ec: ExecutionContext, r: Runnable, delay: FiniteDuration): TimerTask =
-    if (delay <= Duration.Zero) {
-      if (stopped.get != null) throw new SchedulerException("cannot enqueue after timer shutdown")
-      ec.execute(r)
-      NotCancellable
-    } else if (stopped.get != null) {
-      throw new SchedulerException("cannot enqueue after timer shutdown")
-    } else {
-      val delayNanos = delay.toNanos
-      checkMaxDelay(delayNanos)
-
-      val ticks = (delayNanos / tickNanos).toInt
-      val task = new TaskHolder(r, ticks, ec)
-      queue.add(task)
-      if (stopped.get != null && task.cancel())
-        throw new SchedulerException("cannot enqueue after timer shutdown")
-      task
-    }
-
-  private def checkMaxDelay(delayNanos: Long): Unit =
-    if (delayNanos / tickNanos > Int.MaxValue)
-      // 1 second margin in the error message due to rounding
-      throw new IllegalArgumentException(s"Task scheduled with [${delayNanos.nanos.toSeconds}] seconds delay, " +
-        s"which is too far in future, maximum delay is [${(tickNanos * Int.MaxValue).nanos.toSeconds - 1}] seconds")
-
-  private val stopped = new AtomicReference[Promise[immutable.Seq[TimerTask]]]
-  private def stop(): Future[immutable.Seq[TimerTask]] = {
-    val p = Promise[immutable.Seq[TimerTask]]()
-    if (stopped.compareAndSet(null, p)) {
-      // Interrupting the timer thread to make it shut down faster is not good since
-      // it could be in the middle of executing the scheduled tasks, which might not
-      // respond well to being interrupted.
-      // Instead we just wait one more tick for it to finish.
-      p.future
-    } else Future.successful(Nil)
-  }
-
-  @volatile private var timerThread: Thread = threadFactory.newThread(new Runnable {
-
-    var tick = 0
-    val wheel = Array.fill(WheelSize)(new TaskQueue)
-
-    private def clearAll(): immutable.Seq[TimerTask] = {
-      @tailrec def collect(q: TaskQueue, acc: Vector[TimerTask]): Vector[TimerTask] = {
-        q.poll() match {
-          case null ⇒ acc
-          case x    ⇒ collect(q, acc :+ x)
-        }
-      }
-      ((0 until WheelSize) flatMap (i ⇒ collect(wheel(i), Vector.empty))) ++ collect(queue, Vector.empty)
-    }
-
-    @tailrec
-    private def checkQueue(time: Long): Unit = queue.pollNode() match {
-      case null ⇒ ()
-      case node ⇒
-        node.value.ticks match {
-          case 0 ⇒ node.value.executeTask()
-          case ticks ⇒
-            val futureTick = ((
-              time - start + // calculate the nanos since timer start
-              (ticks * tickNanos) + // adding the desired delay
-              tickNanos - 1 // rounding up
-              ) / tickNanos).toInt // and converting to slot number
-            // tick is an Int that will wrap around, but toInt of futureTick gives us modulo operations
-            // and the difference (offset) will be correct in any case 
-            val offset = futureTick - tick
-            val bucket = futureTick & wheelMask
-            node.value.ticks = offset
-            wheel(bucket).addNode(node)
-        }
-        checkQueue(time)
-    }
-
-    override final def run =
-      try nextTick()
-      catch {
-        case t: Throwable ⇒
-          log.error(t, "exception on LARS’ timer thread")
-          stopped.get match {
-            case null ⇒
-              val thread = threadFactory.newThread(this)
-              log.info("starting new LARS thread")
-              try thread.start()
-              catch {
-                case e: Throwable ⇒
-                  log.error(e, "LARS cannot start new thread, ship’s going down!")
-                  stopped.set(Promise successful Nil)
-                  clearAll()
-              }
-              timerThread = thread
-            case p ⇒
-              assert(stopped.compareAndSet(p, Promise successful Nil), "Stop signal violated in LARS")
-              p success clearAll()
-          }
-          throw t
-      }
-
-    @tailrec final def nextTick(): Unit = {
-      val time = clock()
-      val sleepTime = start + (tick * tickNanos) - time
-
-      if (sleepTime > 0) {
-        // check the queue before taking a nap
-        checkQueue(time)
-        waitNanos(sleepTime)
-      } else {
-        val bucket = tick & wheelMask
-        val tasks = wheel(bucket)
-        val putBack = new TaskQueue
-
-        @tailrec def executeBucket(): Unit = tasks.pollNode() match {
-          case null ⇒ ()
-          case node ⇒
-            val task = node.value
-            if (!task.isCancelled) {
-              if (task.ticks >= WheelSize) {
-                task.ticks -= WheelSize
-                putBack.addNode(node)
-              } else task.executeTask()
-            }
-            executeBucket()
-        }
-        executeBucket()
-        wheel(bucket) = putBack
-
-        tick += 1
-      }
-      stopped.get match {
-        case null ⇒ nextTick()
-        case p ⇒
-          assert(stopped.compareAndSet(p, Promise successful Nil), "Stop signal violated in LARS")
-          p success clearAll()
-      }
-    }
-  })
-
-  timerThread.start()
-}
-
-object LightArrayRevolverScheduler {
-  private[this] val taskOffset = unsafe.objectFieldOffset(classOf[TaskHolder].getDeclaredField("task"))
-
-  private class TaskQueue extends AbstractNodeQueue[TaskHolder]
-
-  /**
-   * INTERNAL API
-   */
-  protected[actor] trait TimerTask extends Runnable with Cancellable
-
-  /**
-   * INTERNAL API
-   */
-  protected[actor] class TaskHolder(@volatile var task: Runnable, var ticks: Int, executionContext: ExecutionContext)
-    extends TimerTask {
-
-    @tailrec
-    private final def extractTask(replaceWith: Runnable): Runnable =
-      task match {
-        case t @ (ExecutedTask | CancelledTask) ⇒ t
-        case x                                  ⇒ if (unsafe.compareAndSwapObject(this, taskOffset, x, replaceWith)) x else extractTask(replaceWith)
-      }
-
-    private[akka] final def executeTask(): Boolean = extractTask(ExecutedTask) match {
-      case ExecutedTask | CancelledTask ⇒ false
-      case other ⇒
-        try {
-          executionContext execute other
-          true
-        } catch {
-          case _: InterruptedException ⇒ { Thread.currentThread.interrupt(); false }
-          case NonFatal(e)             ⇒ { executionContext.reportFailure(e); false }
-        }
-    }
-
-    // This should only be called in execDirectly
-    override def run(): Unit = extractTask(ExecutedTask).run()
-
-    override def cancel(): Boolean = extractTask(CancelledTask) match {
-      case ExecutedTask | CancelledTask ⇒ false
-      case _                            ⇒ true
-    }
-
-    override def isCancelled: Boolean = task eq CancelledTask
-  }
-
-  private[this] val CancelledTask = new Runnable { def run = () }
-  private[this] val ExecutedTask = new Runnable { def run = () }
-
-  private val NotCancellable: TimerTask = new TimerTask {
+object Cancellable {
+  val alreadyCancelled: Cancellable = new Cancellable {
     def cancel(): Boolean = false
-    def isCancelled: Boolean = false
-    def run(): Unit = ()
+    def isCancelled: Boolean = true
   }
 
-  private val InitialRepeatMarker: Cancellable = new Cancellable {
+  /**
+   * INTERNAL API
+   */
+  @InternalApi private[akka] val initialNotCancelled: Cancellable = new Cancellable {
     def cancel(): Boolean = false
     def isCancelled: Boolean = false
   }
 }
 
+object Scheduler {
+
+  /**
+   * If a `TaskRunOnClose` is used in `scheduleOnce` it will be run when the `Scheduler` is
+   * closed (`ActorSystem` shutdown). This is needed for the internal shutdown of dispatchers
+   * in Akka and is not intended to be used by end user applications, but it's public because
+   * a custom implementation of `Scheduler` must also implement this.
+   */
+  trait TaskRunOnClose extends Runnable
+}

@@ -1,9 +1,9 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.testkit.metrics
 
-import com.codahale.metrics
 import com.codahale.metrics._
 import java.util
 import com.codahale.metrics.jvm
@@ -15,11 +15,11 @@ import com.codahale.metrics.jvm.MemoryUsageGaugeSet
  * Extracted to give easy overview of user-API detached from MetricsKit internals.
  */
 private[akka] trait MetricsKitOps extends MetricKeyDSL {
-  this: MetricsKit ⇒
+  this: MetricsKit =>
 
   type MetricKey = MetricKeyDSL#MetricKey
 
-  /** Simple thread-safe counter, backed by [[LongAdder]] so can pretty efficiently work even when hit by multiple threads */
+  /** Simple thread-safe counter, backed by `java.util.concurrent.LongAdder` so can pretty efficiently work even when hit by multiple threads */
   def counter(key: MetricKey): Counter = registry.counter(key.toString)
 
   /** Simple averaging Gauge, which exposes an arithmetic mean of the values added to it. */
@@ -27,13 +27,14 @@ private[akka] trait MetricsKitOps extends MetricKeyDSL {
 
   /**
    * Used to measure timing of known number of operations over time.
-   * While not being the most percise, it allows to measure a coarse op/s without injecting counters to the measured operation (potentially hot-loop).
+   * While not being the most precise, it allows to measure a coarse op/s without injecting counters to the measured operation (potentially hot-loop).
    *
    * Do not use for short running pieces of code.
    */
-  def timedWithKnownOps[T](key: MetricKey, ops: Long)(run: ⇒ T): T = {
+  def timedWithKnownOps[T](key: MetricKey, ops: Long)(run: => T): T = {
     val c = getOrRegister(key.toString, new KnownOpsInTimespanTimer(expectedOps = ops))
-    try run finally c.stop()
+    try run
+    finally c.stop()
   }
 
   /**
@@ -43,29 +44,37 @@ private[akka] trait MetricsKitOps extends MetricKeyDSL {
    *
    * @param unitString just for human readable output, during console printing
    */
-  def hdrHistogram(key: MetricKey, highestTrackableValue: Long, numberOfSignificantValueDigits: Int, unitString: String = ""): HdrHistogram =
-    getOrRegister((key / "hdr-histogram").toString, new HdrHistogram(highestTrackableValue, numberOfSignificantValueDigits, unitString))
+  def hdrHistogram(
+      key: MetricKey,
+      highestTrackableValue: Long,
+      numberOfSignificantValueDigits: Int,
+      unitString: String = ""): HdrHistogram =
+    getOrRegister(
+      (key / "hdr-histogram").toString,
+      new HdrHistogram(highestTrackableValue, numberOfSignificantValueDigits, unitString))
 
   /**
    * Use when measuring for 9x'th percentiles as well as min / max / mean values.
    *
-   * Backed by [[ExponentiallyDecayingReservoir]].
+   * Backed by codahale `ExponentiallyDecayingReservoir`.
    */
   def histogram(key: MetricKey): Histogram = {
     registry.histogram((key / "histogram").toString)
   }
 
+  def forceGcEnabled: Boolean = true
+
   /** Yet another delegate to `System.gc()` */
-  def gc() {
-    // todo add some form of logging, to differentiate manual gc calls from "normal" ones
-    System.gc()
+  def gc(): Unit = {
+    if (forceGcEnabled)
+      System.gc()
   }
 
   /**
-   * Enable memory measurements - will be logged by [[ScheduledReporter]]s if enabled.
+   * Enable memory measurements - will be logged by `ScheduledReporter`s if enabled.
    * Must not be triggered multiple times - pass around the `MemoryUsageSnapshotting` if you need to measure different points.
    *
-   * Also allows to [[MemoryUsageSnapshotting.getHeapSnapshot]] to obtain memory usage numbers at given point in time.
+   * Also allows to `MemoryUsageSnapshotting.getHeapSnapshot` to obtain memory usage numbers at given point in time.
    */
   def measureMemory(key: MetricKey): MemoryUsageGaugeSet with MemoryUsageSnapshotting = {
     val gaugeSet = new jvm.MemoryUsageGaugeSet() with MemoryUsageSnapshotting {
@@ -91,7 +100,7 @@ private[metrics] trait MetricsPrefix extends MetricSet {
 
   abstract override def getMetrics: util.Map[String, Metric] = {
     // does not have to be fast, is only called once during registering registry
-    import collection.JavaConverters._
-    (super.getMetrics.asScala.map { case (k, v) ⇒ (prefix / k).toString -> v }).asJava
+    import akka.util.ccompat.JavaConverters._
+    (super.getMetrics.asScala.map { case (k, v) => (prefix / k).toString -> v }).asJava
   }
 }

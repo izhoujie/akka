@@ -1,5 +1,5 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.event
@@ -9,24 +9,22 @@ import language.postfixOps
 import org.scalatest.BeforeAndAfterEach
 import akka.testkit._
 import scala.concurrent.duration._
-import java.util.concurrent.atomic._
 
-import akka.actor.{ Props, Actor, ActorRef, ActorSystem, PoisonPill, RootActorPath }
-import akka.japi.{ Procedure, Function }
+import akka.actor.{ Actor, ActorRef, ActorSystem, PoisonPill, Props }
+import akka.japi.{ Procedure }
 import com.typesafe.config.{ Config, ConfigFactory }
-import scala.concurrent.Await
 
 object EventBusSpec {
   class TestActorWrapperActor(testActor: ActorRef) extends Actor {
     def receive = {
-      case x ⇒ testActor forward x
+      case x => testActor.forward(x)
     }
   }
 }
 
-@org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
-abstract class EventBusSpec(busName: String, conf: Config = ConfigFactory.empty()) extends AkkaSpec(conf) with BeforeAndAfterEach {
-  import EventBusSpec._
+abstract class EventBusSpec(busName: String, conf: Config = ConfigFactory.empty())
+    extends AkkaSpec(conf)
+    with BeforeAndAfterEach {
   type BusType <: EventBus
 
   def createNewEventBus(): BusType
@@ -44,7 +42,8 @@ abstract class EventBusSpec(busName: String, conf: Config = ConfigFactory.empty(
   busName must {
     def createNewSubscriber() = createSubscriber(testActor).asInstanceOf[bus.Subscriber]
     def getClassifierFor(event: BusType#Event) = classifierFor(event).asInstanceOf[bus.Classifier]
-    def createNewEvents(numberOfEvents: Int): Iterable[bus.Event] = createEvents(numberOfEvents).asInstanceOf[Iterable[bus.Event]]
+    def createNewEvents(numberOfEvents: Int): Iterable[bus.Event] =
+      createEvents(numberOfEvents).asInstanceOf[Iterable[bus.Event]]
 
     val events = createNewEvents(100)
     val event = events.head
@@ -78,13 +77,15 @@ abstract class EventBusSpec(busName: String, conf: Config = ConfigFactory.empty(
     }
 
     "allow to add multiple subscribers" in {
-      val subscribers = (1 to 10) map { _ ⇒ createNewSubscriber() }
+      val subscribers = (1 to 10).map { _ =>
+        createNewSubscriber()
+      }
       val events = createEvents(10)
-      val classifiers = events map getClassifierFor
-      subscribers.zip(classifiers) forall { case (s, c) ⇒ bus.subscribe(s, c) } should ===(true)
-      subscribers.zip(classifiers) forall { case (s, c) ⇒ bus.unsubscribe(s, c) } should ===(true)
+      val classifiers = events.map(getClassifierFor)
+      subscribers.zip(classifiers).forall { case (s, c) => bus.subscribe(s, c) } should ===(true)
+      subscribers.zip(classifiers).forall { case (s, c) => bus.unsubscribe(s, c) } should ===(true)
 
-      subscribers foreach (disposeSubscriber(system, _))
+      subscribers.foreach(disposeSubscriber(system, _))
     }
 
     "publishing events without any subscribers shouldn't be a problem" in {
@@ -95,7 +96,7 @@ abstract class EventBusSpec(busName: String, conf: Config = ConfigFactory.empty(
       bus.subscribe(subscriber, classifier)
       bus.publish(event)
       expectMsg(event)
-      expectNoMsg(1 second)
+      expectNoMessage()
       bus.unsubscribe(subscriber, classifier)
     }
 
@@ -107,17 +108,23 @@ abstract class EventBusSpec(busName: String, conf: Config = ConfigFactory.empty(
       expectMsg(event)
       expectMsg(event)
       expectMsg(event)
-      expectNoMsg(1 second)
+      expectNoMessage()
       bus.unsubscribe(subscriber, classifier)
     }
 
     "publish the given event to all intended subscribers" in {
       val range = 0 until 10
-      val subscribers = range map (_ ⇒ createNewSubscriber())
-      subscribers foreach { s ⇒ bus.subscribe(s, classifier) should ===(true) }
+      val subscribers = range.map(_ => createNewSubscriber())
+      subscribers.foreach { s =>
+        bus.subscribe(s, classifier) should ===(true)
+      }
       bus.publish(event)
-      range foreach { _ ⇒ expectMsg(event) }
-      subscribers foreach { s ⇒ bus.unsubscribe(s, classifier) should ===(true); disposeSubscriber(system, s) }
+      range.foreach { _ =>
+        expectMsg(event)
+      }
+      subscribers.foreach { s =>
+        bus.unsubscribe(s, classifier) should ===(true); disposeSubscriber(system, s)
+      }
     }
 
     "not publish the given event to any other subscribers than the intended ones" in {
@@ -129,14 +136,14 @@ abstract class EventBusSpec(busName: String, conf: Config = ConfigFactory.empty(
       expectMsg(event)
       bus.unsubscribe(subscriber, classifier)
       bus.unsubscribe(otherSubscriber, otherClassifier)
-      expectNoMsg(1 second)
+      expectNoMessage()
     }
 
     "not publish the given event to a former subscriber" in {
       bus.subscribe(subscriber, classifier)
       bus.unsubscribe(subscriber, classifier)
       bus.publish(event)
-      expectNoMsg(1 second)
+      expectNoMessage()
     }
 
     "cleanup subscriber" in {
@@ -146,8 +153,10 @@ abstract class EventBusSpec(busName: String, conf: Config = ConfigFactory.empty(
 }
 
 object ActorEventBusSpec {
-  class MyActorEventBus(protected val system: ActorSystem) extends ActorEventBus
-    with ActorClassification with ActorClassifier {
+  class MyActorEventBus(protected val system: ActorSystem)
+      extends ActorEventBus
+      with ManagedActorClassification
+      with ActorClassifier {
 
     type Event = Notification
 
@@ -179,7 +188,7 @@ class ActorEventBusSpec(conf: Config) extends EventBusSpec("ActorEventBus", conf
 
   def disposeSubscriber(system: ActorSystem, subscriber: BusType#Subscriber): Unit = system.stop(subscriber)
 
-  // ActorClassification specific tests
+  // ManagedActorClassification specific tests
 
   "must unsubscribe subscriber when it terminates" in {
     val a1 = createSubscriber(system.deadLetters)
@@ -198,7 +207,7 @@ class ActorEventBusSpec(conf: Config) extends EventBusSpec("ActorEventBus", conf
     expectUnsubscribedByUnsubscriber(p, subs)
 
     bus.publish(m(2))
-    expectNoMsg(1 second)
+    expectNoMessage()
 
     disposeSubscriber(system, subs)
     disposeSubscriber(system, a1)
@@ -247,7 +256,7 @@ class ActorEventBusSpec(conf: Config) extends EventBusSpec("ActorEventBus", conf
 
     bus.unsubscribe(subs, a1)
     bus.publish(m1(2))
-    expectNoMsg(1 second)
+    expectNoMessage()
     bus.publish(m2(2))
     expectMsg(m2(2))
 
@@ -255,26 +264,26 @@ class ActorEventBusSpec(conf: Config) extends EventBusSpec("ActorEventBus", conf
     expectUnregisterFromUnsubscriber(p, subs)
     bus.publish(m1(3))
     bus.publish(m2(3))
-    expectNoMsg(1 second)
+    expectNoMessage()
 
     disposeSubscriber(system, subs)
     disposeSubscriber(system, a1)
     disposeSubscriber(system, a2)
   }
 
-  private def expectUnsubscribedByUnsubscriber(p: TestProbe, a: ActorRef) {
+  private def expectUnsubscribedByUnsubscriber(p: TestProbe, a: ActorRef): Unit = {
     val expectedMsg = s"actor $a has terminated, unsubscribing it from $bus"
     p.fishForMessage(1 second, hint = expectedMsg) {
-      case Logging.Debug(_, _, msg) if msg equals expectedMsg ⇒ true
-      case other ⇒ false
+      case Logging.Debug(_, _, msg) if msg.equals(expectedMsg) => true
+      case _                                                   => false
     }
   }
 
-  private def expectUnregisterFromUnsubscriber(p: TestProbe, a: ActorRef) {
+  private def expectUnregisterFromUnsubscriber(p: TestProbe, a: ActorRef): Unit = {
     val expectedMsg = s"unregistered watch of $a in $bus"
     p.fishForMessage(1 second, hint = expectedMsg) {
-      case Logging.Debug(_, _, msg) if msg equals expectedMsg ⇒ true
-      case other ⇒ false
+      case Logging.Debug(_, _, msg) if msg.equals(expectedMsg) => true
+      case _                                                   => false
     }
   }
 }
@@ -286,7 +295,7 @@ object ScanningEventBusSpec {
     type Subscriber = Procedure[Int]
     type Classifier = String
 
-    protected def compareClassifiers(a: Classifier, b: Classifier): Int = a compareTo b
+    protected def compareClassifiers(a: Classifier, b: Classifier): Int = a.compareTo(b)
     protected def compareSubscribers(a: Subscriber, b: Subscriber): Int = akka.util.Helpers.compareIdentityHash(a, b)
 
     protected def matches(classifier: Classifier, event: Event): Boolean = event.toString == classifier
@@ -341,4 +350,3 @@ class LookupEventBusSpec extends EventBusSpec("LookupEventBus") {
 
   def disposeSubscriber(system: ActorSystem, subscriber: BusType#Subscriber): Unit = ()
 }
-

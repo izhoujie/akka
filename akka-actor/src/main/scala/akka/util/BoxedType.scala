@@ -1,10 +1,11 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.util
 
 object BoxedType {
-  import java.{ lang ⇒ jl }
+  import java.{ lang => jl }
 
   private val toBoxed = Map[Class[_], Class[_]](
     classOf[Boolean] -> classOf[jl.Boolean],

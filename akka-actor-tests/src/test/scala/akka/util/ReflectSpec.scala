@@ -1,18 +1,19 @@
-/**
- * Copyright (C) 2014-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2014-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.util
 
-import org.scalatest.{ Matchers, WordSpec }
-
 import scala.collection.immutable
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AnyWordSpec
 
 object ReflectSpec {
   final class A
   final class B
 
-  class One(a: A)
-  class Two(a: A, b: B)
+  class One(@unused a: A)
+  class Two(@unused a: A, @unused b: B)
 
   class MultipleOne(a: A, b: B) {
     def this(a: A) { this(a, null) }
@@ -20,7 +21,7 @@ object ReflectSpec {
   }
 }
 
-class ReflectSpec extends WordSpec with Matchers {
+class ReflectSpec extends AnyWordSpec with Matchers {
 
   import akka.util.ReflectSpec._
 

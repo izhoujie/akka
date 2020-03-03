@@ -1,17 +1,15 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.routing
 
 import java.util.concurrent.ConcurrentHashMap
 import scala.concurrent.Await
-import scala.concurrent.duration._
-import akka.actor.{ Props, Actor }
-import akka.testkit.{ TestLatch, ImplicitSender, DefaultTimeout, AkkaSpec }
+import akka.actor.{ Actor, Props }
+import akka.testkit.{ AkkaSpec, DefaultTimeout, ImplicitSender, TestLatch }
 
-@org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
-class SmallestMailboxSpec extends AkkaSpec("akka.actor.serialize-messages = off")
-  with DefaultTimeout with ImplicitSender {
+class SmallestMailboxSpec extends AkkaSpec with DefaultTimeout with ImplicitSender {
 
   "smallest mailbox pool" must {
 
@@ -19,15 +17,15 @@ class SmallestMailboxSpec extends AkkaSpec("akka.actor.serialize-messages = off"
       val usedActors = new ConcurrentHashMap[Int, String]()
       val router = system.actorOf(SmallestMailboxPool(3).props(routeeProps = Props(new Actor {
         def receive = {
-          case (busy: TestLatch, receivedLatch: TestLatch) ⇒
+          case (busy: TestLatch, receivedLatch: TestLatch) =>
             usedActors.put(0, self.path.toString)
             self ! "another in busy mailbox"
             receivedLatch.countDown()
             Await.ready(busy, TestLatch.DefaultTimeout)
-          case (msg: Int, receivedLatch: TestLatch) ⇒
+          case (msg: Int, receivedLatch: TestLatch) =>
             usedActors.put(msg, self.path.toString)
             receivedLatch.countDown()
-          case s: String ⇒
+          case _: String =>
         }
       })))
 

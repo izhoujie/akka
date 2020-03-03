@@ -1,38 +1,50 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.remote
 
 import akka.actor.Actor
 import akka.actor.ActorRef
 import akka.actor.Props
 import akka.pattern.ask
-import testkit.{ STMultiNodeSpec, MultiNodeConfig, MultiNodeSpec }
+import testkit.MultiNodeConfig
 import akka.testkit._
 import akka.actor.Identify
 import akka.actor.ActorIdentity
+import com.typesafe.config.ConfigFactory
 
-object LookupRemoteActorMultiJvmSpec extends MultiNodeConfig {
+class LookupRemoteActorMultiJvmSpec(artery: Boolean) extends MultiNodeConfig {
 
-  class SomeActor extends Actor {
-    def receive = {
-      case "identify" ⇒ sender() ! self
-    }
-  }
-
-  commonConfig(debugConfig(on = false))
+  commonConfig(debugConfig(on = false).withFallback(ConfigFactory.parseString(s"""
+      akka.remote.artery.enabled = $artery
+      """)).withFallback(RemotingMultiNodeSpec.commonConfig))
 
   val master = role("master")
   val slave = role("slave")
 
 }
 
-class LookupRemoteActorMultiJvmNode1 extends LookupRemoteActorSpec
-class LookupRemoteActorMultiJvmNode2 extends LookupRemoteActorSpec
+class LookupRemoteActorMultiJvmNode1 extends LookupRemoteActorSpec(new LookupRemoteActorMultiJvmSpec(artery = false))
+class LookupRemoteActorMultiJvmNode2 extends LookupRemoteActorSpec(new LookupRemoteActorMultiJvmSpec(artery = false))
 
-class LookupRemoteActorSpec extends MultiNodeSpec(LookupRemoteActorMultiJvmSpec)
-  with STMultiNodeSpec with ImplicitSender with DefaultTimeout {
-  import LookupRemoteActorMultiJvmSpec._
+class ArteryLookupRemoteActorMultiJvmNode1
+    extends LookupRemoteActorSpec(new LookupRemoteActorMultiJvmSpec(artery = true))
+class ArteryLookupRemoteActorMultiJvmNode2
+    extends LookupRemoteActorSpec(new LookupRemoteActorMultiJvmSpec(artery = true))
+
+object LookupRemoteActorSpec {
+  class SomeActor extends Actor {
+    def receive = {
+      case "identify" => sender() ! self
+    }
+  }
+}
+
+abstract class LookupRemoteActorSpec(multiNodeConfig: LookupRemoteActorMultiJvmSpec)
+    extends RemotingMultiNodeSpec(multiNodeConfig) {
+  import multiNodeConfig._
+  import LookupRemoteActorSpec._
 
   def initialParticipants = 2
 
@@ -56,4 +68,3 @@ class LookupRemoteActorSpec extends MultiNodeSpec(LookupRemoteActorMultiJvmSpec)
   }
 
 }
-

@@ -1,13 +1,15 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.io
 
 import java.nio.channels.SocketChannel
+
 import scala.collection.immutable
 import akka.actor.ActorRef
 import akka.io.Inet.SocketOption
+import com.github.ghik.silencer.silent
 
 /**
  * An actor handling the connection state machine for an incoming, already connected
@@ -15,19 +17,21 @@ import akka.io.Inet.SocketOption
  *
  * INTERNAL API
  */
-private[io] class TcpIncomingConnection(_tcp: TcpExt,
-                                        _channel: SocketChannel,
-                                        registry: ChannelRegistry,
-                                        bindHandler: ActorRef,
-                                        options: immutable.Traversable[SocketOption],
-                                        readThrottling: Boolean)
-  extends TcpConnection(_tcp, _channel, readThrottling) {
+@silent("deprecated")
+private[io] class TcpIncomingConnection(
+    _tcp: TcpExt,
+    _channel: SocketChannel,
+    registry: ChannelRegistry,
+    bindHandler: ActorRef,
+    options: immutable.Traversable[SocketOption],
+    readThrottling: Boolean)
+    extends TcpConnection(_tcp, _channel, readThrottling) {
 
-  context.watch(bindHandler) // sign death pact
+  signDeathPact(bindHandler)
 
   registry.register(channel, initialOps = 0)
 
   def receive = {
-    case registration: ChannelRegistration ⇒ completeConnect(registration, bindHandler, options)
+    case registration: ChannelRegistration => completeConnect(registration, bindHandler, options)
   }
 }

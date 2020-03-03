@@ -1,16 +1,21 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.io
 
+import java.net.DatagramSocket
 import java.net.InetSocketAddress
-import java.nio.channels.DatagramChannel
+
 import com.typesafe.config.Config
+
 import scala.collection.immutable
 import akka.io.Inet.{ SoJavaFactories, SocketOption }
 import akka.util.Helpers.Requiring
 import akka.util.ByteString
 import akka.actor._
+import akka.util.ccompat._
+import com.github.ghik.silencer.silent
 
 /**
  * UDP Extension for Akka’s IO layer.
@@ -24,6 +29,7 @@ import akka.actor._
  *
  * The Java API for generating UDP commands is available at [[UdpMessage]].
  */
+@ccompatUsedUntil213
 object Udp extends ExtensionId[UdpExt] with ExtensionIdProvider {
 
   override def lookup = Udp
@@ -34,6 +40,7 @@ object Udp extends ExtensionId[UdpExt] with ExtensionIdProvider {
    * Java API: retrieve the Udp extension for the given system.
    */
   override def get(system: ActorSystem): UdpExt = super.get(system)
+  override def get(system: ClassicActorSystemProvider): UdpExt = super.get(system)
 
   /**
    * The common interface for [[Command]] and [[Event]].
@@ -92,9 +99,12 @@ object Udp extends ExtensionId[UdpExt] with ExtensionIdProvider {
    * The listener actor for the newly bound port will reply with a [[Bound]]
    * message, or the manager will reply with a [[CommandFailed]] message.
    */
-  final case class Bind(handler: ActorRef,
-                        localAddress: InetSocketAddress,
-                        options: immutable.Traversable[SocketOption] = Nil) extends Command
+  @silent("deprecated")
+  final case class Bind(
+      handler: ActorRef,
+      localAddress: InetSocketAddress,
+      options: immutable.Traversable[SocketOption] = Nil)
+      extends Command
 
   /**
    * Send this message to the listener actor that previously sent a [[Bound]]
@@ -113,6 +123,7 @@ object Udp extends ExtensionId[UdpExt] with ExtensionIdProvider {
    * The “simple sender” will not stop itself, you will have to send it a [[akka.actor.PoisonPill]]
    * when you want to close the socket.
    */
+  @silent("deprecated")
   case class SimpleSender(options: immutable.Traversable[SocketOption] = Nil) extends Command
   object SimpleSender extends SimpleSender(Nil)
 
@@ -120,13 +131,13 @@ object Udp extends ExtensionId[UdpExt] with ExtensionIdProvider {
    * Send this message to a listener actor (which sent a [[Bound]] message) to
    * have it stop reading datagrams from the network. If the O/S kernel’s receive
    * buffer runs full then subsequent datagrams will be silently discarded.
-   * Re-enable reading from the socket using the [[ResumeReading]] command.
+   * Re-enable reading from the socket using the `ResumeReading` command.
    */
   case object SuspendReading extends Command
 
   /**
    * This message must be sent to the listener actor to re-enable reading from
-   * the socket after a [[SuspendReading]] command.
+   * the socket after a `SuspendReading` command.
    */
   case object ResumeReading extends Command
 
@@ -161,7 +172,7 @@ object Udp extends ExtensionId[UdpExt] with ExtensionIdProvider {
   case object SimpleSenderReady extends SimpleSenderReady
 
   /**
-   * This message is sent by the listener actor in response to an [[Unbind]] command
+   * This message is sent by the listener actor in response to an `Unbind` command
    * after the socket has been closed.
    */
   sealed trait Unbound
@@ -180,7 +191,7 @@ object Udp extends ExtensionId[UdpExt] with ExtensionIdProvider {
      * For more information see [[java.net.DatagramSocket#setBroadcast]]
      */
     final case class Broadcast(on: Boolean) extends SocketOption {
-      override def beforeBind(c: DatagramChannel): Unit = c.socket.setBroadcast(on)
+      override def beforeDatagramBind(s: DatagramSocket): Unit = s.setBroadcast(on)
     }
 
   }
@@ -188,7 +199,7 @@ object Udp extends ExtensionId[UdpExt] with ExtensionIdProvider {
   private[io] class UdpSettings(_config: Config) extends SelectionHandlerSettings(_config) {
     import _config._
 
-    val NrOfSelectors: Int = getInt("nr-of-selectors") requiring (_ > 0, "nr-of-selectors must be > 0")
+    val NrOfSelectors: Int = getInt("nr-of-selectors").requiring(_ > 0, "nr-of-selectors must be > 0")
     val DirectBufferSize: Int = getIntBytes("direct-buffer-size")
     val MaxDirectBufferPoolSize: Int = getInt("direct-buffer-pool-limit")
     val BatchReceiveLimit: Int = getInt("receive-throughput")
@@ -213,7 +224,7 @@ class UdpExt(system: ExtendedActorSystem) extends IO.Extension {
 
   val manager: ActorRef = {
     system.systemActorOf(
-      props = Props(classOf[UdpManager], this).withDeploy(Deploy.local),
+      props = Props(classOf[UdpManager], this).withDispatcher(settings.ManagementDispatcher).withDeploy(Deploy.local),
       name = "IO-UDP-FF")
   }
 
@@ -225,7 +236,8 @@ class UdpExt(system: ExtendedActorSystem) extends IO.Extension {
   /**
    * INTERNAL API
    */
-  private[io] val bufferPool: BufferPool = new DirectByteBufferPool(settings.DirectBufferSize, settings.MaxDirectBufferPoolSize)
+  private[io] val bufferPool: BufferPool =
+    new DirectByteBufferPool(settings.DirectBufferSize, settings.MaxDirectBufferPoolSize)
 }
 
 /**
@@ -233,9 +245,8 @@ class UdpExt(system: ExtendedActorSystem) extends IO.Extension {
  */
 object UdpMessage {
   import Udp._
-  import java.lang.{ Iterable ⇒ JIterable }
-  import scala.collection.JavaConverters._
-  import language.implicitConversions
+  import java.lang.{ Iterable => JIterable }
+  import akka.util.ccompat.JavaConverters._
 
   /**
    * Each [[Udp.Send]] can optionally request a positive acknowledgment to be sent
@@ -244,6 +255,7 @@ object UdpMessage {
    * to recognize which write failed when receiving a [[Udp.CommandFailed]] message.
    */
   def noAck(token: AnyRef): NoAck = NoAck(token)
+
   /**
    * Default [[Udp.NoAck]] instance which is used when no acknowledgment information is
    * explicitly provided. Its “token” is `null`.
@@ -267,6 +279,7 @@ object UdpMessage {
    * [[Udp.Bind]] in that case.
    */
   def send(payload: ByteString, target: InetSocketAddress, ack: Event): Command = Send(payload, target, ack)
+
   /**
    * The same as `send(payload, target, noAck())`.
    */
@@ -279,7 +292,8 @@ object UdpMessage {
    * message, or the manager will reply with a [[Udp.CommandFailed]] message.
    */
   def bind(handler: ActorRef, endpoint: InetSocketAddress, options: JIterable[SocketOption]): Command =
-    Bind(handler, endpoint, options.asScala.to)
+    Bind(handler, endpoint, options.asScala.to(immutable.IndexedSeq))
+
   /**
    * Bind without specifying options.
    */
@@ -302,7 +316,8 @@ object UdpMessage {
    * The “simple sender” will not stop itself, you will have to send it a [[akka.actor.PoisonPill]]
    * when you want to close the socket.
    */
-  def simpleSender(options: JIterable[SocketOption]): Command = SimpleSender(options.asScala.to)
+  def simpleSender(options: JIterable[SocketOption]): Command = SimpleSender(options.asScala.to(immutable.IndexedSeq))
+
   /**
    * Retrieve a simple sender without specifying options.
    */
@@ -312,13 +327,13 @@ object UdpMessage {
    * Send this message to a listener actor (which sent a [[Udp.Bound]] message) to
    * have it stop reading datagrams from the network. If the O/S kernel’s receive
    * buffer runs full then subsequent datagrams will be silently discarded.
-   * Re-enable reading from the socket using the [[Udp.ResumeReading]] command.
+   * Re-enable reading from the socket using the `Udp.ResumeReading` command.
    */
   def suspendReading: Command = SuspendReading
 
   /**
    * This message must be sent to the listener actor to re-enable reading from
-   * the socket after a [[Udp.SuspendReading]] command.
+   * the socket after a `Udp.SuspendReading` command.
    */
   def resumeReading: Command = ResumeReading
 }

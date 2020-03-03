@@ -1,6 +1,7 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.testkit
 
 class TestActorsSpec extends AkkaSpec with ImplicitSender {

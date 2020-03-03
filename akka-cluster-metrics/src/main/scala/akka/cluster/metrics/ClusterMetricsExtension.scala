@@ -1,6 +1,7 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.cluster.metrics
 
 import akka.actor.ExtendedActorSystem
@@ -9,6 +10,7 @@ import akka.actor.SupervisorStrategy
 import akka.event.LoggingAdapter
 import akka.event.Logging
 import com.typesafe.config.Config
+
 import scala.collection.immutable
 import akka.actor.Props
 import akka.actor.Deploy
@@ -16,6 +18,7 @@ import akka.actor.ExtensionId
 import akka.actor.ExtensionIdProvider
 import akka.actor.ActorSystem
 import akka.actor.ActorRef
+import akka.actor.ClassicActorSystemProvider
 
 /**
  * Cluster metrics extension.
@@ -43,11 +46,14 @@ class ClusterMetricsExtension(system: ExtendedActorSystem) extends Extension {
    *
    * Supervision strategy.
    */
-  private[metrics] val strategy = system.dynamicAccess.createInstanceFor[SupervisorStrategy](
-    SupervisorStrategyProvider, immutable.Seq(classOf[Config] -> SupervisorStrategyConfiguration))
+  private[metrics] val strategy = system.dynamicAccess
+    .createInstanceFor[SupervisorStrategy](
+      SupervisorStrategyProvider,
+      immutable.Seq(classOf[Config] -> SupervisorStrategyConfiguration))
     .getOrElse {
-      val log: LoggingAdapter = Logging(system, getClass.getName)
-      log.error(s"Configured strategy provider ${SupervisorStrategyProvider} failed to load, using default ${classOf[ClusterMetricsStrategy].getName}.")
+      val log: LoggingAdapter = Logging(system, getClass)
+      log.error(s"Configured strategy provider ${SupervisorStrategyProvider} failed to load, using default ${classOf[
+        ClusterMetricsStrategy].getName}.")
       new ClusterMetricsStrategy(SupervisorStrategyConfiguration)
     }
 
@@ -83,5 +89,7 @@ class ClusterMetricsExtension(system: ExtendedActorSystem) extends Extension {
 object ClusterMetricsExtension extends ExtensionId[ClusterMetricsExtension] with ExtensionIdProvider {
   override def lookup = ClusterMetricsExtension
   override def get(system: ActorSystem): ClusterMetricsExtension = super.get(system)
-  override def createExtension(system: ExtendedActorSystem): ClusterMetricsExtension = new ClusterMetricsExtension(system)
+  override def get(system: ClassicActorSystemProvider): ClusterMetricsExtension = super.get(system)
+  override def createExtension(system: ExtendedActorSystem): ClusterMetricsExtension =
+    new ClusterMetricsExtension(system)
 }

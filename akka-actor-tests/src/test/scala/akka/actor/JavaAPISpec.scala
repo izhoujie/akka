@@ -1,8 +1,11 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.actor
 
-import org.scalatest.junit.JUnitSuiteLike
+import com.github.ghik.silencer.silent
+import org.scalatestplus.junit.JUnitSuiteLike
 
+@silent
 class JavaAPISpec extends JavaAPI with JUnitSuiteLike

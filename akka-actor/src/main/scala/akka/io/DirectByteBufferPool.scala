@@ -1,16 +1,15 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.io
 
 import java.nio.ByteBuffer
-import java.util.concurrent.locks.ReentrantLock
-import java.util.concurrent.TimeUnit
+import scala.util.control.NonFatal
 
 trait BufferPool {
   def acquire(): ByteBuffer
-  def release(buf: ByteBuffer)
+  def release(buf: ByteBuffer): Unit
 }
 
 /**
@@ -27,9 +26,8 @@ trait BufferPool {
  * benefit to wrapping in-heap JVM data when writing with NIO.
  */
 private[akka] class DirectByteBufferPool(defaultBufferSize: Int, maxPoolEntries: Int) extends BufferPool {
-  private[this] val lock = new ReentrantLock
-  private[this] val pool = new Array[ByteBuffer](maxPoolEntries)
-  private[this] var buffersInPool = 0
+  private[this] val pool: Array[ByteBuffer] = new Array[ByteBuffer](maxPoolEntries)
+  private[this] var buffersInPool: Int = 0
 
   def acquire(): ByteBuffer =
     takeBufferFromPool()
@@ -41,15 +39,12 @@ private[akka] class DirectByteBufferPool(defaultBufferSize: Int, maxPoolEntries:
     ByteBuffer.allocateDirect(size)
 
   private final def takeBufferFromPool(): ByteBuffer = {
-    var buffer: ByteBuffer = null
-
-    if (lock.tryLock(1, TimeUnit.MILLISECONDS))
-      try
-        if (buffersInPool > 0) {
-          buffersInPool -= 1
-          buffer = pool(buffersInPool)
-        }
-      finally lock.unlock()
+    val buffer = pool.synchronized {
+      if (buffersInPool > 0) {
+        buffersInPool -= 1
+        pool(buffersInPool)
+      } else null
+    }
 
     // allocate new and clear outside the lock
     if (buffer == null)
@@ -60,12 +55,53 @@ private[akka] class DirectByteBufferPool(defaultBufferSize: Int, maxPoolEntries:
     }
   }
 
-  private final def offerBufferToPool(buf: ByteBuffer): Unit =
-    if (lock.tryLock(1, TimeUnit.MILLISECONDS))
-      try
+  private final def offerBufferToPool(buf: ByteBuffer): Unit = {
+    val clean =
+      pool.synchronized {
         if (buffersInPool < maxPoolEntries) {
           pool(buffersInPool) = buf
           buffersInPool += 1
-        } // else let the buffer be gc'd
-      finally lock.unlock()
+          false
+        } else {
+          // try to clean it outside the lock, or let the buffer be gc'd
+          true
+        }
+      }
+    if (clean)
+      tryCleanDirectByteBuffer(buf)
+  }
+
+  private final def tryCleanDirectByteBuffer(toBeDestroyed: ByteBuffer): Unit =
+    DirectByteBufferPool.tryCleanDirectByteBuffer(toBeDestroyed)
+}
+
+/** INTERNAL API */
+private[akka] object DirectByteBufferPool {
+  private val CleanDirectBuffer: ByteBuffer => Unit =
+    try {
+      val cleanerMethod = Class.forName("java.nio.DirectByteBuffer").getMethod("cleaner")
+      cleanerMethod.setAccessible(true)
+
+      val cleanMethod = Class.forName("sun.misc.Cleaner").getMethod("clean")
+      cleanMethod.setAccessible(true)
+
+      { (bb: ByteBuffer) =>
+        try if (bb.isDirect) {
+          val cleaner = cleanerMethod.invoke(bb)
+          cleanMethod.invoke(cleaner)
+        } catch { case NonFatal(_) => /* ok, best effort attempt to cleanup failed */ }
+      }
+    } catch { case NonFatal(_) => _ => () /* reflection failed, use no-op fallback */ }
+
+  /**
+   * DirectByteBuffers are garbage collected by using a phantom reference and a
+   * reference queue. Every once a while, the JVM checks the reference queue and
+   * cleans the DirectByteBuffers. However, as this doesn't happen
+   * immediately after discarding all references to a DirectByteBuffer, it's
+   * easy to OutOfMemoryError yourself using DirectByteBuffers. This function
+   * explicitly calls the Cleaner method of a DirectByteBuffer.
+   *
+   * Utilizes reflection to avoid dependency to `sun.misc.Cleaner`.
+   */
+  def tryCleanDirectByteBuffer(byteBuffer: ByteBuffer): Unit = CleanDirectBuffer(byteBuffer)
 }

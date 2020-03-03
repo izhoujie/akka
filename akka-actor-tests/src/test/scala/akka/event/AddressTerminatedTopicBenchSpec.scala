@@ -1,13 +1,13 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.event
 
 import scala.concurrent.duration._
 import akka.actor.Actor
 import akka.actor.ActorRef
 import akka.actor.ActorSystem
-import akka.actor.Address
 import akka.actor.Props
 import akka.testkit._
 
@@ -25,7 +25,6 @@ object AddressTerminatedTopicBenchSpec {
   }
 }
 
-@org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
 class AddressTerminatedTopicBenchSpec extends AkkaSpec("akka.loglevel=INFO") {
   import AddressTerminatedTopicBenchSpec._
 
@@ -38,7 +37,7 @@ class AddressTerminatedTopicBenchSpec extends AkkaSpec("akka.loglevel=INFO") {
 
         val t1 = System.nanoTime()
         val p = Props(classOf[Subscriber], testActor)
-        val subscribers = Vector.fill(num)(sys.actorOf(p))
+        Vector.fill(num)(sys.actorOf(p))
         receiveN(num, 10.seconds)
         log.info("Starting {} actors took {} ms", num, (System.nanoTime() - t1).nanos.toMillis)
 
@@ -46,7 +45,7 @@ class AddressTerminatedTopicBenchSpec extends AkkaSpec("akka.loglevel=INFO") {
         shutdown(sys, 10.seconds, verifySystemShutdown = true)
         log.info("Stopping {} actors took {} ms", num, (System.nanoTime() - t2).nanos.toMillis)
       } finally {
-        if (!sys.isTerminated) shutdown(sys)
+        shutdown(sys)
       }
     }
 

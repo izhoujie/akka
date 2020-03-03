@@ -1,6 +1,7 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.remote
 
 import akka.actor.Terminated
@@ -9,27 +10,19 @@ import language.postfixOps
 import akka.actor.Actor
 import akka.actor.ActorRef
 import akka.actor.Props
-import testkit.{ STMultiNodeSpec, MultiNodeConfig, MultiNodeSpec }
-import akka.testkit._
+import akka.util.unused
+import testkit.MultiNodeConfig
 import com.typesafe.config.ConfigFactory
+
 import scala.concurrent.duration._
 
-object NewRemoteActorMultiJvmSpec extends MultiNodeConfig {
+class NewRemoteActorMultiJvmSpec(artery: Boolean) extends MultiNodeConfig {
 
-  class SomeActor extends Actor {
-    def receive = {
-      case "identify" ⇒ sender() ! self
-    }
-  }
-
-  class SomeActorWithParam(ignored: String) extends Actor {
-    def receive = {
-      case "identify" ⇒ sender() ! self
-    }
-  }
-
-  commonConfig(debugConfig(on = false).withFallback(
-    ConfigFactory.parseString("akka.remote.log-remote-lifecycle-events = off")))
+  commonConfig(debugConfig(on = false).withFallback(ConfigFactory.parseString(s"""
+      akka.remote.log-remote-lifecycle-events = off
+      akka.remote.artery.enabled = $artery
+      akka.remote.use-unsafe-remote-features-outside-cluster = on
+      """).withFallback(RemotingMultiNodeSpec.commonConfig)))
 
   val master = role("master")
   val slave = role("slave")
@@ -43,20 +36,38 @@ object NewRemoteActorMultiJvmSpec extends MultiNodeConfig {
   deployOnAll("""/service-hello2.remote = "@slave@" """)
 }
 
-class NewRemoteActorMultiJvmNode1 extends NewRemoteActorSpec
-class NewRemoteActorMultiJvmNode2 extends NewRemoteActorSpec
+class NewRemoteActorMultiJvmNode1 extends NewRemoteActorSpec(new NewRemoteActorMultiJvmSpec(artery = false))
+class NewRemoteActorMultiJvmNode2 extends NewRemoteActorSpec(new NewRemoteActorMultiJvmSpec(artery = false))
 
-class NewRemoteActorSpec extends MultiNodeSpec(NewRemoteActorMultiJvmSpec)
-  with STMultiNodeSpec with ImplicitSender with DefaultTimeout {
-  import NewRemoteActorMultiJvmSpec._
+class ArteryNewRemoteActorMultiJvmNode1 extends NewRemoteActorSpec(new NewRemoteActorMultiJvmSpec(artery = true))
+class ArteryNewRemoteActorMultiJvmNode2 extends NewRemoteActorSpec(new NewRemoteActorMultiJvmSpec(artery = true))
+
+object NewRemoteActorSpec {
+  class SomeActor extends Actor {
+    def receive = {
+      case "identify" => sender() ! self
+    }
+  }
+
+  class SomeActorWithParam(@unused ignored: String) extends Actor {
+    def receive = {
+      case "identify" => sender() ! self
+    }
+  }
+}
+
+abstract class NewRemoteActorSpec(multiNodeConfig: NewRemoteActorMultiJvmSpec)
+    extends RemotingMultiNodeSpec(multiNodeConfig) {
+  import multiNodeConfig._
+  import NewRemoteActorSpec._
 
   def initialParticipants = roles.size
 
-  // ensure that system shutdown is successful
+  // ensure that system.terminate is successful
   override def verifySystemShutdown = true
 
   "A new remote actor" must {
-    "be locally instantiated on a remote node and be able to communicate through its RemoteActorRef" taggedAs LongRunningTest in {
+    "be locally instantiated on a remote node and be able to communicate through its RemoteActorRef" in {
 
       runOn(master) {
         val actor = system.actorOf(Props[SomeActor], "service-hello")
@@ -71,7 +82,7 @@ class NewRemoteActorSpec extends MultiNodeSpec(NewRemoteActorMultiJvmSpec)
       enterBarrier("done")
     }
 
-    "be locally instantiated on a remote node (with null parameter) and be able to communicate through its RemoteActorRef" taggedAs LongRunningTest in {
+    "be locally instantiated on a remote node (with null parameter) and be able to communicate through its RemoteActorRef" in {
 
       runOn(master) {
         val actor = system.actorOf(Props(classOf[SomeActorWithParam], null), "service-hello-null")
@@ -86,7 +97,7 @@ class NewRemoteActorSpec extends MultiNodeSpec(NewRemoteActorMultiJvmSpec)
       enterBarrier("done")
     }
 
-    "be locally instantiated on a remote node and be able to communicate through its RemoteActorRef (with deployOnAll)" taggedAs LongRunningTest in {
+    "be locally instantiated on a remote node and be able to communicate through its RemoteActorRef (with deployOnAll)" in {
 
       runOn(master) {
         val actor = system.actorOf(Props[SomeActor], "service-hello2")
@@ -101,7 +112,7 @@ class NewRemoteActorSpec extends MultiNodeSpec(NewRemoteActorMultiJvmSpec)
       enterBarrier("done")
     }
 
-    "be able to shutdown system when using remote deployed actor" taggedAs LongRunningTest in within(20 seconds) {
+    "be able to shutdown system when using remote deployed actor" in within(20 seconds) {
       runOn(master) {
         val actor = system.actorOf(Props[SomeActor], "service-hello3")
         actor.isInstanceOf[RemoteActorRef] should ===(true)
@@ -116,8 +127,8 @@ class NewRemoteActorSpec extends MultiNodeSpec(NewRemoteActorMultiJvmSpec)
         enterBarrier("deployed")
 
         // master system is supposed to be shutdown after slave
-        // this should be triggered by slave system shutdown
-        expectMsgPF() { case Terminated(`actor`) ⇒ true }
+        // this should be triggered by slave system.terminate
+        expectMsgPF() { case Terminated(`actor`) => true }
       }
 
       runOn(slave) {
@@ -126,7 +137,7 @@ class NewRemoteActorSpec extends MultiNodeSpec(NewRemoteActorMultiJvmSpec)
 
       // Important that this is the last test.
       // It should not be any barriers here.
-      // verifySystemShutdown = true will ensure that system shutdown is successful
+      // verifySystemShutdown = true will ensure that system.terminate is successful
     }
   }
 }

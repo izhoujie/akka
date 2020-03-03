@@ -1,9 +1,8 @@
-/**
- * Copyright (C) 2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2015-2020 Lightbend Inc. <https://www.lightbend.com>
  */
-package akka.util
 
-import language.higherKinds
+package akka.util
 
 /**
  * An immutable multi-map that expresses the value type as a type function of the key
@@ -42,8 +41,8 @@ class TypedMultiMap[T <: AnyRef, K[_ <: T]] private (private val map: Map[T, Set
    */
   def inserted(key: T)(value: K[key.type]): TypedMultiMap[T, K] = {
     val set = map.get(key) match {
-      case Some(s) ⇒ s
-      case None    ⇒ Set.empty[Any]
+      case Some(s) => s
+      case None    => Set.empty[Any]
     }
     new TypedMultiMap[T, K](map.updated(key, set + value))
   }
@@ -53,8 +52,8 @@ class TypedMultiMap[T <: AnyRef, K[_ <: T]] private (private val map: Map[T, Set
    */
   def get(key: T): Set[K[key.type]] =
     map.get(key) match {
-      case Some(s) ⇒ s.asInstanceOf[Set[K[key.type]]]
-      case None    ⇒ Set.empty
+      case Some(s) => s.asInstanceOf[Set[K[key.type]]]
+      case None    => Set.empty
     }
 
   /**
@@ -63,7 +62,7 @@ class TypedMultiMap[T <: AnyRef, K[_ <: T]] private (private val map: Map[T, Set
   def valueRemoved(value: Any): TypedMultiMap[T, K] = {
     val s = Set(value)
     val m = map.collect {
-      case (k, set) if set != s ⇒ (k, set - value)
+      case (k, set) if set != s => (k, set - value)
     }
     new TypedMultiMap[T, K](m)
   }
@@ -78,8 +77,8 @@ class TypedMultiMap[T <: AnyRef, K[_ <: T]] private (private val map: Map[T, Set
    */
   def removed(key: T)(value: K[key.type]): TypedMultiMap[T, K] = {
     map.get(key) match {
-      case None ⇒ this
-      case Some(set) ⇒
+      case None => this
+      case Some(set) =>
         if (set(value)) {
           val newset = set - value
           val newmap = if (newset.isEmpty) map - key else map.updated(key, newset)
@@ -88,10 +87,21 @@ class TypedMultiMap[T <: AnyRef, K[_ <: T]] private (private val map: Map[T, Set
     }
   }
 
+  def setAll(key: T)(values: Set[K[key.type]]): TypedMultiMap[T, K] =
+    new TypedMultiMap[T, K](map.updated(key, values.asInstanceOf[Set[Any]]))
+
+  /**
+   * Add all entries from the other map, overwriting existing entries.
+   *
+   * FIXME: should it merge, instead?
+   */
+  def ++(other: TypedMultiMap[T, K]): TypedMultiMap[T, K] =
+    new TypedMultiMap[T, K](map ++ other.map)
+
   override def toString: String = s"TypedMultiMap($map)"
   override def equals(other: Any) = other match {
-    case o: TypedMultiMap[_, _] ⇒ map == o.map
-    case _                      ⇒ false
+    case o: TypedMultiMap[_, _] => map == o.map
+    case _                      => false
   }
   override def hashCode: Int = map.hashCode
 }

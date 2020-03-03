@@ -1,11 +1,13 @@
-/**
- * Copyright (C) 2014-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2014-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.actor
 
+import scala.concurrent.duration._
 import java.util.concurrent.TimeUnit
-
 import org.openjdk.jmh.annotations._
+import scala.concurrent.Await
 
 /*
 regex checking:
@@ -15,7 +17,7 @@ hand checking:
 [info] a.a.ActorCreationBenchmark.synchronousStarting       ss    120000       21.496        0.502       us
 
 
-*/
+ */
 @State(Scope.Benchmark)
 @BenchmarkMode(Array(Mode.SingleShotTime))
 @Fork(5)
@@ -28,14 +30,14 @@ class ActorCreationBenchmark {
 
   var i = 1
   def name = {
-    i +=1
+    i += 1
     "some-rather-long-actor-name-actor-" + i
   }
 
   @TearDown(Level.Trial)
-  def shutdown() {
-    system.shutdown()
-    system.awaitTermination()
+  def shutdown(): Unit = {
+    system.terminate()
+    Await.ready(system.whenTerminated, 15.seconds)
   }
 
   @Benchmark
@@ -46,6 +48,6 @@ class ActorCreationBenchmark {
 
 class MyActor extends Actor {
   override def receive: Receive = {
-    case _ ⇒
+    case _ =>
   }
 }

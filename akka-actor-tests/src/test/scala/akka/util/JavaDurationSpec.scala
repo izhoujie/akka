@@ -1,8 +1,11 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.util
 
-import org.scalatest.junit.JUnitSuiteLike
+import com.github.ghik.silencer.silent
+import org.scalatestplus.junit.JUnitSuiteLike
 
+@silent
 class JavaDurationSpec extends JavaDuration with JUnitSuiteLike

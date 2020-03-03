@@ -1,7 +1,11 @@
+/*
+ * Copyright (C) 2018-2020 Lightbend Inc. <https://www.lightbend.com>
+ */
+
 package akka.remote
 
 import akka.testkit.AkkaSpec
-import akka.actor.{ Props, ActorRef, Address }
+import akka.actor.{ Address, Props }
 import akka.remote.EndpointManager._
 import scala.concurrent.duration._
 
@@ -20,9 +24,9 @@ class EndpointRegistrySpec extends AkkaSpec {
 
       reg.writableEndpointWithPolicyFor(address1) should ===(None)
 
-      reg.registerWritableEndpoint(address1, None, None, actorA) should ===(actorA)
+      reg.registerWritableEndpoint(address1, None, actorA) should ===(actorA)
 
-      reg.writableEndpointWithPolicyFor(address1) should ===(Some(Pass(actorA, None, None)))
+      reg.writableEndpointWithPolicyFor(address1) should ===(Some(Pass(actorA, None)))
       reg.readOnlyEndpointFor(address1) should ===(None)
       reg.isWritable(actorA) should ===(true)
       reg.isReadOnly(actorA) should ===(false)
@@ -49,10 +53,10 @@ class EndpointRegistrySpec extends AkkaSpec {
       reg.writableEndpointWithPolicyFor(address1) should ===(None)
 
       reg.registerReadOnlyEndpoint(address1, actorA, 1) should ===(actorA)
-      reg.registerWritableEndpoint(address1, None, None, actorB) should ===(actorB)
+      reg.registerWritableEndpoint(address1, None, actorB) should ===(actorB)
 
       reg.readOnlyEndpointFor(address1) should ===(Some((actorA, 1)))
-      reg.writableEndpointWithPolicyFor(address1) should ===(Some(Pass(actorB, None, None)))
+      reg.writableEndpointWithPolicyFor(address1) should ===(Some(Pass(actorB, None)))
 
       reg.isWritable(actorA) should ===(false)
       reg.isWritable(actorB) should ===(true)
@@ -66,7 +70,7 @@ class EndpointRegistrySpec extends AkkaSpec {
       val reg = new EndpointRegistry
 
       reg.writableEndpointWithPolicyFor(address1) should ===(None)
-      reg.registerWritableEndpoint(address1, None, None, actorA)
+      reg.registerWritableEndpoint(address1, None, actorA)
       val deadline = Deadline.now
       reg.markAsFailed(actorA, deadline)
       reg.writableEndpointWithPolicyFor(address1) should ===(Some(Gated(deadline)))
@@ -85,8 +89,8 @@ class EndpointRegistrySpec extends AkkaSpec {
     "keep tombstones when removing an endpoint" in {
       val reg = new EndpointRegistry
 
-      reg.registerWritableEndpoint(address1, None, None, actorA)
-      reg.registerWritableEndpoint(address2, None, None, actorB)
+      reg.registerWritableEndpoint(address1, None, actorA)
+      reg.registerWritableEndpoint(address2, None, actorB)
       val deadline = Deadline.now
       reg.markAsFailed(actorA, deadline)
       reg.markAsQuarantined(address2, 42, deadline)
@@ -102,8 +106,8 @@ class EndpointRegistrySpec extends AkkaSpec {
     "prune outdated Gated directives properly" in {
       val reg = new EndpointRegistry
 
-      reg.registerWritableEndpoint(address1, None, None, actorA)
-      reg.registerWritableEndpoint(address2, None, None, actorB)
+      reg.registerWritableEndpoint(address1, None, actorA)
+      reg.registerWritableEndpoint(address2, None, actorB)
       reg.markAsFailed(actorA, Deadline.now)
       val farInTheFuture = Deadline.now + Duration(60, SECONDS)
       reg.markAsFailed(actorB, farInTheFuture)
@@ -122,6 +126,29 @@ class EndpointRegistrySpec extends AkkaSpec {
       reg.isQuarantined(address1, 42) should ===(true)
       reg.isQuarantined(address1, 33) should ===(false)
       reg.writableEndpointWithPolicyFor(address1) should ===(Some(Quarantined(42, deadline)))
+    }
+
+    "keep refuseUid after register new endpoint" in {
+      val reg = new EndpointRegistry
+      val deadline = Deadline.now + 30.minutes
+
+      reg.registerWritableEndpoint(address1, None, actorA)
+      reg.markAsQuarantined(address1, 42, deadline)
+      reg.refuseUid(address1) should ===(Some(42))
+      reg.isQuarantined(address1, 42) should ===(true)
+
+      reg.unregisterEndpoint(actorA)
+      // Quarantined marker is kept so far
+      reg.writableEndpointWithPolicyFor(address1) should ===(Some(Quarantined(42, deadline)))
+      reg.refuseUid(address1) should ===(Some(42))
+      reg.isQuarantined(address1, 42) should ===(true)
+
+      reg.registerWritableEndpoint(address1, None, actorB)
+      // Quarantined marker is gone
+      reg.writableEndpointWithPolicyFor(address1) should ===(Some(Pass(actorB, None)))
+      // but we still have the refuseUid
+      reg.refuseUid(address1) should ===(Some(42))
+      reg.isQuarantined(address1, 42) should ===(true)
     }
 
   }

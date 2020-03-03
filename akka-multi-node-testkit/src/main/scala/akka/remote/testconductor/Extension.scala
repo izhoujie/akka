@@ -1,14 +1,13 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.remote.testconductor
 
-import akka.actor.{ Extension, ExtensionId, ExtensionIdProvider, ExtendedActorSystem, ActorContext, ActorRef, Address, ActorSystem, Props }
+import akka.actor.ClassicActorSystemProvider
+import akka.actor.{ ActorContext, ActorSystem, ExtendedActorSystem, Extension, ExtensionId, ExtensionIdProvider }
 import akka.remote.RemoteActorRefProvider
 import akka.util.Timeout
-import java.util.concurrent.TimeUnit.MILLISECONDS
-import java.util.concurrent.ConcurrentHashMap
-import scala.concurrent.duration.Duration
 import com.typesafe.config.Config
 import akka.dispatch.ThreadPoolConfig
 
@@ -32,6 +31,7 @@ object TestConductor extends ExtensionId[TestConductorExt] with ExtensionIdProvi
    * Java API: retrieve the TestConductor extension for the given system.
    */
   override def get(system: ActorSystem): TestConductorExt = super.get(system)
+  override def get(system: ClassicActorSystemProvider): TestConductorExt = super.get(system)
 
   def apply()(implicit ctx: ActorContext): TestConductorExt = apply(ctx.system)
 

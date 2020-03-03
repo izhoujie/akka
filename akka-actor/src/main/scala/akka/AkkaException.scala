@@ -1,15 +1,11 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka
 
 /**
- * Akka base Exception. Each Exception gets:
- * <ul>
- *   <li>a uuid for tracking purposes</li>
- *   <li>toString that includes exception name, message and uuid</li>
- * </ul>
+ * Akka base Exception.
  */
 @SerialVersionUID(1L)
 class AkkaException(message: String, cause: Throwable) extends RuntimeException(message, cause) with Serializable {
@@ -20,11 +16,11 @@ class AkkaException(message: String, cause: Throwable) extends RuntimeException(
  * Mix in this trait to suppress the StackTrace for the instance of the exception but not the cause,
  * scala.util.control.NoStackTrace suppresses all the StackTraces.
  */
-trait OnlyCauseStackTrace { self: Throwable ⇒
+trait OnlyCauseStackTrace { self: Throwable =>
   override def fillInStackTrace(): Throwable = {
     setStackTrace(getCause match {
-      case null ⇒ Array.empty
-      case some ⇒ some.getStackTrace
+      case null => Array.empty
+      case some => some.getStackTrace
     })
     this
   }

@@ -1,42 +1,47 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.routing
 
 import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.Await
 import scala.concurrent.duration._
-import akka.actor.{ Props, Actor }
+import akka.actor.{ Actor, Props }
 import akka.pattern.ask
-import akka.testkit.{ TestLatch, ImplicitSender, DefaultTimeout, AkkaSpec }
+import akka.testkit.{ AkkaSpec, DefaultTimeout, ImplicitSender, TestLatch }
 import akka.actor.ActorSystem
+import akka.actor.Status
+import java.util.concurrent.TimeoutException
+import akka.testkit.TestProbe
 
 object ScatterGatherFirstCompletedSpec {
   class TestActor extends Actor {
-    def receive = { case _ ⇒ }
+    def receive = { case _ => }
   }
 
   final case class Stop(id: Option[Int] = None)
 
   def newActor(id: Int, shudownLatch: Option[TestLatch] = None)(implicit system: ActorSystem) =
-    system.actorOf(Props(new Actor {
-      def receive = {
-        case Stop(None)                     ⇒ context.stop(self)
-        case Stop(Some(_id)) if (_id == id) ⇒ context.stop(self)
-        case _id: Int if (_id == id)        ⇒
-        case x ⇒ {
-          Thread sleep 100 * id
-          sender() ! id
+    system.actorOf(
+      Props(new Actor {
+        def receive = {
+          case Stop(None)                     => context.stop(self)
+          case Stop(Some(_id)) if (_id == id) => context.stop(self)
+          case _id: Int if (_id == id)        =>
+          case _ => {
+            Thread.sleep(100 * id)
+            sender() ! id
+          }
         }
-      }
 
-      override def postStop = {
-        shudownLatch foreach (_.countDown())
-      }
-    }), "Actor:" + id)
+        override def postStop = {
+          shudownLatch.foreach(_.countDown())
+        }
+      }),
+      "Actor:" + id)
 }
 
-@org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
 class ScatterGatherFirstCompletedSpec extends AkkaSpec with DefaultTimeout with ImplicitSender {
   import ScatterGatherFirstCompletedSpec._
 
@@ -48,16 +53,16 @@ class ScatterGatherFirstCompletedSpec extends AkkaSpec with DefaultTimeout with 
       val counter1 = new AtomicInteger
       val actor1 = system.actorOf(Props(new Actor {
         def receive = {
-          case "end"    ⇒ doneLatch.countDown()
-          case msg: Int ⇒ counter1.addAndGet(msg)
+          case "end"    => doneLatch.countDown()
+          case msg: Int => counter1.addAndGet(msg)
         }
       }))
 
       val counter2 = new AtomicInteger
       val actor2 = system.actorOf(Props(new Actor {
         def receive = {
-          case "end"    ⇒ doneLatch.countDown()
-          case msg: Int ⇒ counter2.addAndGet(msg)
+          case "end"    => doneLatch.countDown()
+          case msg: Int => counter2.addAndGet(msg)
         }
       }))
 
@@ -82,6 +87,18 @@ class ScatterGatherFirstCompletedSpec extends AkkaSpec with DefaultTimeout with 
       routedActor ! Broadcast(Stop(Some(1)))
       Await.ready(shutdownLatch, TestLatch.DefaultTimeout)
       Await.result(routedActor ? Broadcast(0), timeout.duration) should ===(14)
+    }
+
+  }
+
+  "Scatter-gather pool" must {
+
+    "without routees should reply immediately" in {
+      val probe = TestProbe()
+      val router =
+        system.actorOf(ScatterGatherFirstCompletedPool(nrOfInstances = 0, within = 5.seconds).props(Props.empty))
+      router.tell("hello", probe.ref)
+      probe.expectMsgType[Status.Failure](2.seconds).cause.getClass should be(classOf[TimeoutException])
     }
 
   }

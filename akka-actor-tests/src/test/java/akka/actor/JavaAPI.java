@@ -1,5 +1,5 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.actor;
@@ -7,6 +7,10 @@ package akka.actor;
 import akka.event.Logging;
 import akka.event.Logging.LoggerInitialized;
 import akka.japi.Creator;
+import akka.japi.Pair;
+import akka.japi.Util;
+import akka.japi.tuple.Tuple22;
+import akka.japi.tuple.Tuple4;
 import akka.routing.GetRoutees;
 import akka.routing.FromConfig;
 import akka.routing.NoRouter;
@@ -16,13 +20,18 @@ import akka.testkit.TestProbe;
 
 import org.junit.ClassRule;
 import org.junit.Test;
+import org.scalatestplus.junit.JUnitSuite;
+import scala.Option;
+
+import java.util.Optional;
+
 import static org.junit.Assert.*;
 
-public class JavaAPI {
+public class JavaAPI extends JUnitSuite {
 
   @ClassRule
-  public static AkkaJUnitActorSystemResource actorSystemResource = new AkkaJUnitActorSystemResource("JavaAPI",
-      AkkaSpec.testConf());
+  public static AkkaJUnitActorSystemResource actorSystemResource =
+      new AkkaJUnitActorSystemResource("JavaAPI", AkkaSpec.testConf());
 
   private final ActorSystem system = actorSystemResource.getSystem();
 
@@ -41,6 +50,8 @@ public class JavaAPI {
     final GetRoutees r = GetRoutees.getInstance();
     final NoRouter nr = NoRouter.getInstance();
     final FromConfig fc = FromConfig.getInstance();
+
+    final ActorPath p = ActorPaths.fromString("akka://Sys@localhost:1234/user/abc");
   }
 
   @Test
@@ -49,26 +60,24 @@ public class JavaAPI {
     assertNotNull(ref);
   }
 
-  public static Props mkProps() {
-    return Props.create(new Creator<Actor>() {
-      public Actor create() {
-        return new JavaAPITestActor();
-      }
-    });
-  }
-
   @SuppressWarnings("unchecked")
   public static Props mkErasedProps() {
-    return Props.create(JavaAPITestActor.class, new Creator() {
-      public Object create() {
-        return new JavaAPITestActor();
-      }
-    });
+    return Props.create(
+        JavaAPITestActor.class,
+        new Creator() {
+          public Object create() {
+            return new JavaAPITestActor();
+          }
+        });
+  }
+
+  public static Props mkPropsWithLambda() {
+    return Props.create(JavaAPITestActor.class, JavaAPITestActor::new);
   }
 
   @Test
   public void mustBeAbleToCreateActorRefFromFactory() {
-    ActorRef ref = system.actorOf(mkProps());
+    ActorRef ref = system.actorOf(mkPropsWithLambda());
     assertNotNull(ref);
   }
 
@@ -80,7 +89,9 @@ public class JavaAPI {
 
   @Test
   public void mustBeAbleToCreateActorWIthConstructorParams() {
-    ActorRef ref = system.actorOf(Props.create(ActorWithConstructorParams.class, "a", "b", new Integer(17), 18));
+    ActorRef ref =
+        system.actorOf(
+            Props.create(ActorWithConstructorParams.class, "a", "b", new Integer(17), 18));
     final TestProbe probe = new TestProbe(system);
     probe.send(ref, "get");
     probe.expectMsg("a-b-17-18");
@@ -88,7 +99,9 @@ public class JavaAPI {
 
   @Test
   public void mustBeAbleToCreateActorWIthBoxedAndUnBoxedConstructorParams() {
-    ActorRef ref = system.actorOf(Props.create(ActorWithConstructorParams.class, "a", "b", 17, new Integer(18)));
+    ActorRef ref =
+        system.actorOf(
+            Props.create(ActorWithConstructorParams.class, "a", "b", 17, new Integer(18)));
     final TestProbe probe = new TestProbe(system);
     probe.send(ref, "get");
     probe.expectMsg("a-b-17-18");
@@ -96,7 +109,8 @@ public class JavaAPI {
 
   @Test
   public void mustBeAbleToCreateActorWIthNullConstructorParams() {
-    ActorRef ref = system.actorOf(Props.create(ActorWithConstructorParams.class, "a", null, null, 18));
+    ActorRef ref =
+        system.actorOf(Props.create(ActorWithConstructorParams.class, "a", null, null, 18));
     final TestProbe probe = new TestProbe(system);
     probe.send(ref, "get");
     probe.expectMsg("a-null-null-18");
@@ -105,7 +119,8 @@ public class JavaAPI {
   @Test
   public void mustBeAbleToCreateActorWIthNullConstructorParams2() {
     // without this Object array wrapper it will not compile: "reference to create is ambiguous"
-    ActorRef ref = system.actorOf(Props.create(ActorWithConstructorParams.class, new Object[] { null }));
+    ActorRef ref =
+        system.actorOf(Props.create(ActorWithConstructorParams.class, new Object[] {null}));
     final TestProbe probe = new TestProbe(system);
     probe.send(ref, "get");
     probe.expectMsg("null-undefined-0-0");
@@ -119,7 +134,24 @@ public class JavaAPI {
     probe.expectMsg("a-null-0-0");
   }
 
-  public static class ActorWithConstructorParams extends UntypedActor {
+  @Test
+  @SuppressWarnings("unused")
+  public void mustCompileTupleCreation() {
+    final Pair<Integer, String> p = Pair.create(1, "2");
+    final Tuple4<Integer, String, Integer, Long> t4 = Tuple4.create(1, "2", 3, 4L);
+    Tuple22.create(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22);
+  }
+
+  @Test
+  public void mustBeAbleToCreateOptionFromOptional() {
+    Option<Object> empty = Util.option(Optional.ofNullable(null));
+    assertTrue(empty.isEmpty());
+
+    Option<String> full = Util.option(Optional.ofNullable("hello"));
+    assertTrue(full.isDefined());
+  }
+
+  public static class ActorWithConstructorParams extends UntypedAbstractActor {
 
     private final String a;
     private final String b;
@@ -161,11 +193,16 @@ public class JavaAPI {
       this.d = d;
     }
 
-    @Override
     public void onReceive(Object msg) {
-      String reply = String.valueOf(a) + "-" + String.valueOf(b) + "-" + String.valueOf(c) + "-" + String.valueOf(d);
+      String reply =
+          String.valueOf(a)
+              + "-"
+              + String.valueOf(b)
+              + "-"
+              + String.valueOf(c)
+              + "-"
+              + String.valueOf(d);
       getSender().tell(reply, getSelf());
     }
   }
-
 }

@@ -1,20 +1,18 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.cluster.metrics
 
 import scala.language.postfixOps
 import java.util.logging.LogManager
+
 import org.slf4j.bridge.SLF4JBridgeHandler
 import akka.testkit.AkkaSpec
 import akka.actor.ExtendedActorSystem
 import akka.actor.Address
-import akka.cluster.MemberStatus
-import akka.cluster.Member
-import akka.cluster.UniqueAddress
-import akka.cluster.Cluster
 import java.io.Closeable
+
 import akka.actor.ActorRef
 import akka.actor.Props
 import akka.actor.Actor
@@ -23,9 +21,10 @@ import akka.actor.Deploy
 import akka.dispatch.UnboundedMessageQueueSemantics
 import akka.actor.PoisonPill
 import akka.actor.ActorLogging
-import org.scalatest.mock.MockitoSugar
+import org.scalatestplus.mockito.MockitoSugar
 import akka.actor.ActorSystem
 import akka.dispatch.Dispatchers
+import akka.remote.RARP
 
 /**
  * Redirect different logging sources to SLF4J.
@@ -53,11 +52,13 @@ case class SimpleSigarProvider(location: String = "native") extends SigarProvide
  * Provide sigar library as static mock.
  */
 case class MockitoSigarProvider(
-  pid: Long = 123,
-  loadAverage: Array[Double] = Array(0.7, 0.3, 0.1),
-  cpuCombined: Double = 0.5,
-  cpuStolen: Double = 0.2,
-  steps: Int = 5) extends SigarProvider with MockitoSugar {
+    pid: Long = 123,
+    loadAverage: Array[Double] = Array(0.7, 0.3, 0.1),
+    cpuCombined: Double = 0.5,
+    cpuStolen: Double = 0.2,
+    steps: Int = 5)
+    extends SigarProvider
+    with MockitoSugar {
 
   import org.hyperic.sigar._
   import org.mockito.Mockito._
@@ -68,7 +69,7 @@ case class MockitoSigarProvider(
   /** Generate monotonic array from 0 to value. */
   def increase(value: Double): Array[Double] = {
     val delta = value / steps
-    (0 to steps) map { _ * delta } toArray
+    (0 to steps).map { _ * delta } toArray
   }
 
   /** Sigar mock instance. */
@@ -77,13 +78,13 @@ case class MockitoSigarProvider(
     // Note "thenReturn(0)" invocation is consumed in collector construction.
 
     val cpuPerc = mock[CpuPerc]
-    when(cpuPerc.getCombined) thenReturn (0, increase(cpuCombined): _*)
-    when(cpuPerc.getStolen) thenReturn (0, increase(cpuStolen): _*)
+    when(cpuPerc.getCombined).thenReturn(0, increase(cpuCombined): _*)
+    when(cpuPerc.getStolen).thenReturn(0, increase(cpuStolen): _*)
 
     val sigar = mock[SigarProxy]
-    when(sigar.getPid) thenReturn pid
-    when(sigar.getLoadAverage) thenReturn loadAverage // Constant.
-    when(sigar.getCpuPerc) thenReturn cpuPerc // Increasing.
+    when(sigar.getPid).thenReturn(pid)
+    when(sigar.getLoadAverage).thenReturn(loadAverage) // Constant.
+    when(sigar.getCpuPerc).thenReturn(cpuPerc) // Increasing.
 
     sigar
   }
@@ -94,7 +95,7 @@ case class MockitoSigarProvider(
  *
  * TODO change factory after https://github.com/akka/akka/issues/16369
  */
-trait MetricsCollectorFactory { this: AkkaSpec ⇒
+trait MetricsCollectorFactory { this: AkkaSpec =>
   import MetricsConfig._
   import org.hyperic.sigar.Sigar
 
@@ -107,7 +108,7 @@ trait MetricsCollectorFactory { this: AkkaSpec ⇒
       new SigarMetricsCollector(selfAddress, defaultDecayFactor, new Sigar())
       //new SigarMetricsCollector(selfAddress, defaultDecayFactor, SimpleSigarProvider().createSigarInstance)
     } catch {
-      case e: Throwable ⇒
+      case e: Throwable =>
         log.warning("Sigar failed to load. Using JMX. Reason: " + e.toString)
         new JmxMetricsCollector(selfAddress, defaultDecayFactor)
     }
@@ -135,11 +136,10 @@ trait MetricsCollectorFactory { this: AkkaSpec ⇒
  *
  */
 class MockitoSigarMetricsCollector(system: ActorSystem)
-  extends SigarMetricsCollector(
-    Address("akka.tcp", system.name),
-    MetricsConfig.defaultDecayFactor,
-    MockitoSigarProvider().createSigarInstance) {
-}
+    extends SigarMetricsCollector(
+      Address(if (RARP(system).provider.remoteSettings.Artery.Enabled) "akka" else "akka.tcp", system.name),
+      MetricsConfig.defaultDecayFactor,
+      MockitoSigarProvider().createSigarInstance) {}
 
 /**
  * Metrics test configurations.
@@ -157,7 +157,7 @@ object MetricsConfig {
         gossip-interval = 1s
       }
     }
-    akka.actor.provider = "akka.remote.RemoteActorRefProvider"
+    akka.actor.provider = remote
   """
 
   /** Test w/o cluster, with collection disabled. */
@@ -167,7 +167,7 @@ object MetricsConfig {
         enabled = off
       }
     }
-    akka.actor.provider = "akka.remote.RemoteActorRefProvider"
+    akka.actor.provider = remote
   """
 
   /** Test in cluster, with manual collection activation, collector mock, fast. */
@@ -182,7 +182,7 @@ object MetricsConfig {
         fallback = false
       }
     }
-    akka.actor.provider = "akka.cluster.ClusterActorRefProvider"
+    akka.actor.provider = "cluster"
   """
 }
 
@@ -203,17 +203,19 @@ class ClusterMetricsView(system: ExtendedActorSystem) extends Closeable {
 
   /** Create actor that subscribes to the cluster eventBus to update current read view state. */
   private val eventBusListener: ActorRef = {
-    system.systemActorOf(Props(new Actor with ActorLogging with RequiresMessageQueue[UnboundedMessageQueueSemantics] {
-      override def preStart(): Unit = extension.subscribe(self)
-      override def postStop(): Unit = extension.unsubscribe(self)
-      def receive = {
-        case ClusterMetricsChanged(nodes) ⇒
-          currentMetricsSet = nodes
-          collectedMetricsList = nodes :: collectedMetricsList
-        case _ ⇒
-        // Ignore.
-      }
-    }).withDispatcher(Dispatchers.DefaultDispatcherId).withDeploy(Deploy.local), name = "metrics-event-bus-listener")
+    system.systemActorOf(
+      Props(new Actor with ActorLogging with RequiresMessageQueue[UnboundedMessageQueueSemantics] {
+        override def preStart(): Unit = extension.subscribe(self)
+        override def postStop(): Unit = extension.unsubscribe(self)
+        def receive = {
+          case ClusterMetricsChanged(nodes) =>
+            currentMetricsSet = nodes
+            collectedMetricsList = nodes :: collectedMetricsList
+          case _ =>
+          // Ignore.
+        }
+      }).withDispatcher(Dispatchers.DefaultDispatcherId).withDeploy(Deploy.local),
+      name = "metrics-event-bus-listener")
   }
 
   /** Current cluster metrics. */

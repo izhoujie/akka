@@ -1,5 +1,5 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.routing
@@ -7,13 +7,10 @@ package akka.routing
 import akka.testkit.AkkaSpec
 import akka.actor.Props
 import akka.actor.Actor
-import akka.actor.ActorRef
-import akka.actor.LocalActorRef
 import scala.concurrent.duration._
 import akka.actor.Identify
 import akka.actor.ActorIdentity
 
-@org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
 class RouteeCreationSpec extends AkkaSpec {
 
   "Creating Routees" must {
@@ -24,10 +21,10 @@ class RouteeCreationSpec extends AkkaSpec {
         system.actorSelection(self.path).tell(Identify(self.path), testActor)
         def receive = Actor.emptyBehavior
       })))
-      for (i ← 1 to N) {
+      for (i <- 1 to N) {
         expectMsgType[ActorIdentity] match {
-          case ActorIdentity(_, Some(_)) ⇒ // fine
-          case x                         ⇒ fail(s"routee $i was not found $x")
+          case ActorIdentity(_, Some(_)) => // fine
+          case x                         => fail(s"routee $i was not found $x")
         }
       }
     }
@@ -37,15 +34,15 @@ class RouteeCreationSpec extends AkkaSpec {
       system.actorOf(RoundRobinPool(N).props(Props(new Actor {
         context.parent ! "one"
         def receive = {
-          case "one" ⇒ testActor forward "two"
+          case "one" => testActor.forward("two")
         }
       })))
       val gotit = receiveWhile(messages = N) {
-        case "two" ⇒ lastSender.toString
+        case "two" => lastSender.toString
       }
-      expectNoMsg(100.millis)
+      expectNoMessage(100.millis)
       if (gotit.size != N) {
-        fail(s"got only ${gotit.size} from [${gotit mkString ", "}]")
+        fail(s"got only ${gotit.size} from [${gotit.mkString(", ")}]")
       }
     }
 

@@ -1,18 +1,25 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.pattern;
 
 import akka.util.Unsafe;
 
 class AbstractCircuitBreaker {
-    protected final static long stateOffset;
+  protected static final long stateOffset;
+  protected static final long resetTimeoutOffset;
 
-    static {
-        try {
-            stateOffset = Unsafe.instance.objectFieldOffset(CircuitBreaker.class.getDeclaredField("_currentStateDoNotCallMeDirectly"));
-        } catch(Throwable t){
-            throw new ExceptionInInitializerError(t);
-        }
+  static {
+    try {
+      stateOffset =
+          Unsafe.instance.objectFieldOffset(
+              CircuitBreaker.class.getDeclaredField("_currentStateDoNotCallMeDirectly"));
+      resetTimeoutOffset =
+          Unsafe.instance.objectFieldOffset(
+              CircuitBreaker.class.getDeclaredField("_currentResetTimeoutDoNotCallMeDirectly"));
+    } catch (Throwable t) {
+      throw new ExceptionInInitializerError(t);
     }
+  }
 }

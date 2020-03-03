@@ -1,6 +1,5 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
- * Copyright (C) 2012-2013 Eligotech BV.
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.persistence.journal.leveldb
@@ -10,10 +9,7 @@ import java.nio.ByteBuffer
 /**
  * LevelDB key.
  */
-private[leveldb] final case class Key(
-  persistenceId: Int,
-  sequenceNr: Long,
-  mappingId: Int)
+private[leveldb] final case class Key(persistenceId: Int, sequenceNr: Long, mappingId: Int)
 
 private[leveldb] object Key {
   def keyToBytes(key: Key): Array[Byte] = {
@@ -42,4 +38,3 @@ private[leveldb] object Key {
   def deletionKey(persistenceId: Int, sequenceNr: Long): Key = Key(persistenceId, sequenceNr, 1)
   def isDeletionKey(key: Key): Boolean = key.mappingId == 1
 }
-

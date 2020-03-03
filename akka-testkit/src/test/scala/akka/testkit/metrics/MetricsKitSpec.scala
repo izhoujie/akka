@@ -1,15 +1,15 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.testkit.metrics
 
 import org.scalatest._
 import com.typesafe.config.ConfigFactory
-import scala.util.Random
-import org.scalautils.Tolerance
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AnyWordSpec
 
-class MetricsKitSpec extends WordSpec with Matchers with BeforeAndAfter with BeforeAndAfterAll
-  with MetricsKit {
+class MetricsKitSpec extends AnyWordSpec with Matchers with BeforeAndAfter with BeforeAndAfterAll with MetricsKit {
 
   import scala.concurrent.duration._
 
@@ -21,7 +21,7 @@ class MetricsKitSpec extends WordSpec with Matchers with BeforeAndAfter with Bef
     clearMetrics()
   }
 
-  override def afterAll() {
+  override def afterAll(): Unit = {
     shutdownMetrics()
   }
 
@@ -55,8 +55,8 @@ class MetricsKitSpec extends WordSpec with Matchers with BeforeAndAfter with Bef
       val hist = hdrHistogram(KitKey / "hist", highestTrackableValue = maxMillis, 4, "ns")
 
       for {
-        n ← 1 to 11
-        i ← 0L to 1579331
+        _ <- 1 to 11
+        i <- 0L to 1579331
       } hist.update(i)
 
       hist.update(1579331)

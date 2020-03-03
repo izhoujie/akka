@@ -1,6 +1,7 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.event
 
 import language.postfixOps
@@ -8,16 +9,12 @@ import language.postfixOps
 import scala.concurrent.duration._
 import akka.actor._
 import com.typesafe.config.ConfigFactory
-import scala.collection.JavaConverters._
-import akka.event.Logging.InitializeLogger
-import akka.pattern.gracefulStop
-import akka.testkit.{ EventFilter, TestEvent, TestProbe, AkkaSpec }
+import akka.testkit.{ AkkaSpec, TestProbe }
 
 object EventStreamSpec {
 
   val config = ConfigFactory.parseString("""
       akka {
-        actor.serialize-messages = off
         stdout-loglevel = WARNING
         loglevel = INFO
         loggers = ["akka.event.EventStreamSpec$MyLog", "%s"]
@@ -26,16 +23,15 @@ object EventStreamSpec {
 
   val configUnhandled = ConfigFactory.parseString("""
       akka {
-        actor.serialize-messages = off
         stdout-loglevel = WARNING
         loglevel = WARNING
         actor.debug.unhandled = on
+        log-dead-letters = off
       }
       """)
 
   val configUnhandledWithDebug =
-    ConfigFactory.parseString("akka.actor.debug.event-stream = on")
-      .withFallback(configUnhandled)
+    ConfigFactory.parseString("akka.actor.debug.event-stream = on").withFallback(configUnhandled)
 
   final case class M(i: Int)
 
@@ -44,13 +40,13 @@ object EventStreamSpec {
   class MyLog extends Actor {
     var dst: ActorRef = context.system.deadLetters
     def receive = {
-      case Logging.InitializeLogger(bus) ⇒
+      case Logging.InitializeLogger(bus) =>
         bus.subscribe(context.self, classOf[SetTarget])
         bus.subscribe(context.self, classOf[UnhandledMessage])
         sender() ! Logging.LoggerInitialized
-      case SetTarget(ref)      ⇒ { dst = ref; dst ! "OK" }
-      case e: Logging.LogEvent ⇒ dst ! e
-      case u: UnhandledMessage ⇒ dst ! u
+      case SetTarget(ref)      => { dst = ref; dst ! "OK" }
+      case e: Logging.LogEvent => dst ! e
+      case u: UnhandledMessage => dst ! u
     }
   }
 
@@ -69,7 +65,6 @@ object EventStreamSpec {
   class CCATBT extends CC with ATT with BTT
 }
 
-@org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
 class EventStreamSpec extends AkkaSpec(EventStreamSpec.config) {
 
   import EventStreamSpec._
@@ -90,18 +85,20 @@ class EventStreamSpec extends AkkaSpec(EventStreamSpec.config) {
         expectMsg(M(42))
         bus.unsubscribe(testActor)
         bus.publish(M(13))
-        expectNoMsg
+        expectNoMessage
       }
     }
 
     "not allow null as subscriber" in {
       val bus = new EventStream(system, true)
-      intercept[IllegalArgumentException] { bus.subscribe(null, classOf[M]) }.getMessage should ===("subscriber is null")
+      intercept[IllegalArgumentException] { bus.subscribe(null, classOf[M]) }.getMessage should ===(
+        "subscriber is null")
     }
 
     "not allow null as unsubscriber" in {
       val bus = new EventStream(system, true)
-      intercept[IllegalArgumentException] { bus.unsubscribe(null, classOf[M]) }.getMessage should ===("subscriber is null")
+      intercept[IllegalArgumentException] { bus.unsubscribe(null, classOf[M]) }.getMessage should ===(
+        "subscriber is null")
       intercept[IllegalArgumentException] { bus.unsubscribe(null) }.getMessage should ===("subscriber is null")
     }
 
@@ -111,7 +108,12 @@ class EventStreamSpec extends AkkaSpec(EventStreamSpec.config) {
         sys.eventStream.subscribe(testActor, classOf[AnyRef])
         val m = UnhandledMessage(42, sys.deadLetters, sys.deadLetters)
         sys.eventStream.publish(m)
-        expectMsgAllOf(m, Logging.Debug(sys.deadLetters.path.toString, sys.deadLetters.getClass, "unhandled message from " + sys.deadLetters + ": 42"))
+        expectMsgAllOf(
+          m,
+          Logging.Debug(
+            sys.deadLetters.path.toString,
+            sys.deadLetters.getClass,
+            "unhandled message from " + sys.deadLetters + ": 42"))
         sys.eventStream.unsubscribe(testActor)
       } finally {
         shutdown(sys)
@@ -157,7 +159,7 @@ class EventStreamSpec extends AkkaSpec(EventStreamSpec.config) {
         bus.publish(a)
         expectMsg(b2)
         expectMsg(a)
-        expectNoMsg
+        expectNoMessage
       }
     }
 
@@ -199,7 +201,7 @@ class EventStreamSpec extends AkkaSpec(EventStreamSpec.config) {
       es.publish(tm2)
       a1.expectMsgType[AT] should ===(tm2)
       a2.expectMsgType[BT] should ===(tm2)
-      a3.expectNoMsg(1 second)
+      a3.expectNoMessage(1 second)
       a4.expectMsgType[CCATBT] should ===(tm2)
       es.unsubscribe(a1.ref, classOf[AT]) should ===(true)
       es.unsubscribe(a2.ref, classOf[BT]) should ===(true)
@@ -221,7 +223,7 @@ class EventStreamSpec extends AkkaSpec(EventStreamSpec.config) {
       es.publish(tm2)
       a1.expectMsgType[AT] should ===(tm2)
       a2.expectMsgType[BT] should ===(tm2)
-      a3.expectNoMsg(1 second)
+      a3.expectNoMessage(1 second)
       a4.expectMsgType[CCATBT] should ===(tm2)
       es.unsubscribe(a1.ref, classOf[AT]) should ===(true)
       es.unsubscribe(a2.ref, classOf[BT]) should ===(true)
@@ -274,7 +276,7 @@ class EventStreamSpec extends AkkaSpec(EventStreamSpec.config) {
       es.subscribe(a1.ref, classOf[AT]) should ===(true)
       es.publish(tm1)
       a1.expectMsgType[AT] should ===(tm1)
-      a2.expectNoMsg(1 second)
+      a2.expectNoMessage(1 second)
       es.subscribe(a2.ref, classOf[BTT]) should ===(true)
       es.publish(tm1)
       a1.expectMsgType[AT] should ===(tm1)
@@ -292,7 +294,7 @@ class EventStreamSpec extends AkkaSpec(EventStreamSpec.config) {
         val tm = new A
 
         val target = sys.actorOf(Props(new Actor {
-          def receive = { case in ⇒ a1.ref forward in }
+          def receive = { case in => a1.ref.forward(in) }
         }), "to-be-killed")
 
         es.subscribe(a2.ref, classOf[Any])
@@ -305,7 +307,7 @@ class EventStreamSpec extends AkkaSpec(EventStreamSpec.config) {
 
         es.publish(tm)
 
-        a1.expectNoMsg(1 second)
+        a1.expectNoMessage(1 second)
         a2.expectMsg(tm)
       } finally {
         shutdown(sys)
@@ -320,7 +322,7 @@ class EventStreamSpec extends AkkaSpec(EventStreamSpec.config) {
         val a1, a2 = TestProbe()
 
         val target = system.actorOf(Props(new Actor {
-          def receive = { case in ⇒ a1.ref forward in }
+          def receive = { case in => a1.ref.forward(in) }
         }), "to-be-killed")
 
         watch(target)
@@ -393,12 +395,12 @@ class EventStreamSpec extends AkkaSpec(EventStreamSpec.config) {
 
         es.unsubscribe(a2.ref, classOf[A]) should equal(true)
         fishForDebugMessage(a1, s"unsubscribing ${a2.ref} from channel class akka.event.EventStreamSpec$$A")
-        a1.expectNoMsg(1 second)
+        a1.expectNoMessage(1 second)
 
         es.unsubscribe(a2.ref, classOf[T]) should equal(true)
         fishForDebugMessage(a1, s"unsubscribing ${a2.ref} from channel interface akka.event.EventStreamSpec$$T")
         fishForDebugMessage(a1, s"unwatching ${a2.ref}, since has no subscriptions")
-        a1.expectNoMsg(1 second)
+        a1.expectNoMessage(1 second)
 
         es.unsubscribe(a2.ref, classOf[T]) should equal(false)
 
@@ -409,18 +411,19 @@ class EventStreamSpec extends AkkaSpec(EventStreamSpec.config) {
 
   }
 
-  private def verifyLevel(bus: LoggingBus, level: Logging.LogLevel) {
+  private def verifyLevel(bus: LoggingBus, level: Logging.LogLevel): Unit = {
     import Logging._
-    val allmsg = Seq(Debug("", null, "debug"), Info("", null, "info"), Warning("", null, "warning"), Error("", null, "error"))
-    val msg = allmsg filter (_.level <= level)
-    allmsg foreach bus.publish
-    msg foreach (expectMsg(_))
+    val allmsg =
+      Seq(Debug("", null, "debug"), Info("", null, "info"), Warning("", null, "warning"), Error("", null, "error"))
+    val msg = allmsg.filter(_.level <= level)
+    allmsg.foreach(bus.publish)
+    msg.foreach(expectMsg(_))
   }
 
-  private def fishForDebugMessage(a: TestProbe, messagePrefix: String, max: Duration = 3 seconds) {
+  private def fishForDebugMessage(a: TestProbe, messagePrefix: String, max: Duration = 3 seconds): Unit = {
     a.fishForMessage(max, hint = "expected debug message prefix: " + messagePrefix) {
-      case Logging.Debug(_, _, msg: String) if msg startsWith messagePrefix ⇒ true
-      case other ⇒ false
+      case Logging.Debug(_, _, msg: String) if msg.startsWith(messagePrefix) => true
+      case _                                                                 => false
     }
   }
 

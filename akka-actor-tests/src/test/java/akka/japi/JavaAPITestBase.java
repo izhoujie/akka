@@ -1,3 +1,7 @@
+/*
+ * Copyright (C) 2018-2020 Lightbend Inc. <https://www.lightbend.com>
+ */
+
 package akka.japi;
 
 import akka.actor.ExtendedActorSystem;
@@ -5,11 +9,13 @@ import akka.event.LoggingAdapter;
 import akka.event.NoLogging;
 import akka.serialization.JavaSerializer;
 import org.junit.Test;
+import org.scalatestplus.junit.JUnitSuite;
+
 import java.util.concurrent.Callable;
 
 import static org.junit.Assert.*;
 
-public class JavaAPITestBase {
+public class JavaAPITestBase extends JUnitSuite {
 
   @Test
   public void shouldCreateSomeString() {
@@ -35,18 +41,16 @@ public class JavaAPITestBase {
 
   @Test
   public void shouldEnterForLoop() {
-    for (@SuppressWarnings("unused")
-    String s : Option.some("abc")) {
+    for (@SuppressWarnings("unused") String s : Option.some("abc")) {
       return;
     }
-    fail("for-loop not entered");
+    org.junit.Assert.fail("for-loop not entered");
   }
 
   @Test
   public void shouldNotEnterForLoop() {
-    for (@SuppressWarnings("unused")
-    Object o : Option.none()) {
-      fail("for-loop entered");
+    for (@SuppressWarnings("unused") Object o : Option.none()) {
+      org.junit.Assert.fail("for-loop entered");
     }
   }
 
@@ -57,16 +61,20 @@ public class JavaAPITestBase {
 
   @Test
   public void mustBeAbleToGetNoLogging() {
-      LoggingAdapter a = NoLogging.getInstance();
-      assertNotNull(a);
+    LoggingAdapter a = NoLogging.getInstance();
+    assertNotNull(a);
   }
-    
+
   @Test
   public void mustBeAbleToUseCurrentSystem() {
-      assertNull(JavaSerializer.currentSystem().withValue(null, new Callable<ExtendedActorSystem>() {
-          public ExtendedActorSystem call() {
-              return JavaSerializer.currentSystem().value();
-          }
-      }));
+    assertNull(
+        JavaSerializer.currentSystem()
+            .withValue(
+                null,
+                new Callable<ExtendedActorSystem>() {
+                  public ExtendedActorSystem call() {
+                    return JavaSerializer.currentSystem().value();
+                  }
+                }));
   }
 }

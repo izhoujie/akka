@@ -1,25 +1,21 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.cluster
 
-import org.scalatest.WordSpec
-import org.scalatest.Matchers
 import akka.actor.Address
-import akka.routing.ConsistentHash
-import scala.concurrent.duration._
-import scala.collection.immutable
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AnyWordSpec
 
-@org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
-class HeartbeatNodeRingSpec extends WordSpec with Matchers {
+class HeartbeatNodeRingSpec extends AnyWordSpec with Matchers {
 
-  val aa = UniqueAddress(Address("akka.tcp", "sys", "aa", 2552), 1)
-  val bb = UniqueAddress(Address("akka.tcp", "sys", "bb", 2552), 2)
-  val cc = UniqueAddress(Address("akka.tcp", "sys", "cc", 2552), 3)
-  val dd = UniqueAddress(Address("akka.tcp", "sys", "dd", 2552), 4)
-  val ee = UniqueAddress(Address("akka.tcp", "sys", "ee", 2552), 5)
-  val ff = UniqueAddress(Address("akka.tcp", "sys", "ff", 2552), 6)
+  val aa = UniqueAddress(Address("akka", "sys", "aa", 2552), 1L)
+  val bb = UniqueAddress(Address("akka", "sys", "bb", 2552), 2L)
+  val cc = UniqueAddress(Address("akka", "sys", "cc", 2552), 3L)
+  val dd = UniqueAddress(Address("akka", "sys", "dd", 2552), 4L)
+  val ee = UniqueAddress(Address("akka", "sys", "ee", 2552), 5L)
+  val ff = UniqueAddress(Address("akka", "sys", "ff", 2552), 6L)
 
   val nodes = Set(aa, bb, cc, dd, ee, ff)
 
@@ -29,7 +25,7 @@ class HeartbeatNodeRingSpec extends WordSpec with Matchers {
       val ring = HeartbeatNodeRing(cc, nodes, Set.empty, 3)
       ring.myReceivers should ===(ring.receivers(cc))
 
-      nodes foreach { n ⇒
+      nodes.foreach { n =>
         val receivers = ring.receivers(n)
         receivers.size should ===(3)
         receivers should not contain (n)

@@ -17,10 +17,12 @@
  *  @version 2.9
  *  @since   2.9
  */
-
 package akka.routing
 
-import java.lang.Integer.{ rotateLeft ⇒ rotl }
+import java.lang.Integer.{ rotateLeft => rotl }
+
+import akka.util.ccompat._
+import com.github.ghik.silencer.silent
 
 /**
  * An object designed to generate well-distributed non-cryptographic
@@ -31,7 +33,7 @@ import java.lang.Integer.{ rotateLeft ⇒ rotl }
  *  incorporate a new integer) to update the values.  Only one method
  *  needs to be called to finalize the hash.
  */
-
+@ccompatUsedUntil213
 object MurmurHash {
   // Magic values used for MurmurHash's 32 bit hash.
   // Don't change these without consulting a hashing expert!
@@ -68,11 +70,11 @@ object MurmurHash {
   /**
    * Incorporates a new value into an existing hash.
    *
-   *  @param   hash    the prior hash value
-   *  @param  value    the new value to incorporate
-   *  @param magicA    a magic integer from the stream
-   *  @param magicB    a magic integer from a different stream
-   *  @return          the updated hash value
+   * @param   hash    the prior hash value
+   * @param  value    the new value to incorporate
+   * @param magicA    a magic integer from the stream
+   * @param magicB    a magic integer from a different stream
+   * @return          the updated hash value
    */
   def extendHash(hash: Int, value: Int, magicA: Int, magicB: Int): Int =
     (hash ^ rotl(value * magicA, 11) * magicB) * 3 + visibleMixer
@@ -115,7 +117,7 @@ object MurmurHash {
     var k = hiddenMagicB
     var j = 0
     while (j + 1 < s.length) {
-      val i = (s.charAt(j) << 16) + s.charAt(j + 1);
+      val i = (s.charAt(j) << 16) + s.charAt(j + 1)
       h = extendHash(h, i, c, k)
       c = nextMagicA(c)
       k = nextMagicB(k)
@@ -130,10 +132,11 @@ object MurmurHash {
    *  where the order of appearance of elements does not matter.
    *  This is useful for hashing sets, for example.
    */
-  def symmetricHash[T](xs: TraversableOnce[T], seed: Int): Int = {
+  @silent("deprecated")
+  def symmetricHash[T](xs: IterableOnce[T], seed: Int): Int = {
     var a, b, n = 0
     var c = 1
-    xs.foreach(i ⇒ {
+    xs.foreach(i => {
       val h = i.##
       a += h
       b ^= h

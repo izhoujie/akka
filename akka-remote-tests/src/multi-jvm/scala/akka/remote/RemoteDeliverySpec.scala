@@ -1,49 +1,54 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.remote
 
 import scala.language.postfixOps
-
 import scala.concurrent.duration._
+
 import com.typesafe.config.ConfigFactory
 import akka.actor.Actor
 import akka.actor.ActorRef
 import akka.actor.Props
 import akka.remote.testconductor.RoleName
 import akka.remote.testkit.MultiNodeConfig
-import akka.remote.testkit.MultiNodeSpec
-import akka.remote.testkit.STMultiNodeSpec
-import akka.testkit._
 import akka.actor.ActorIdentity
 import akka.actor.Identify
+import akka.serialization.jackson.CborSerializable
 
-object RemoteDeliveryMultiJvmSpec extends MultiNodeConfig {
+class RemoteDeliveryConfig(artery: Boolean) extends MultiNodeConfig {
   val first = role("first")
   val second = role("second")
   val third = role("third")
 
-  commonConfig(debugConfig(on = false).withFallback(ConfigFactory.parseString("akka.loglevel=INFO")))
+  commonConfig(debugConfig(on = false).withFallback(ConfigFactory.parseString(s"""
+      akka.remote.artery.enabled = $artery
+      """)).withFallback(RemotingMultiNodeSpec.commonConfig))
+}
 
-  final case class Letter(n: Int, route: List[ActorRef])
+class RemoteDeliveryMultiJvmNode1 extends RemoteDeliverySpec(new RemoteDeliveryConfig(artery = false))
+class RemoteDeliveryMultiJvmNode2 extends RemoteDeliverySpec(new RemoteDeliveryConfig(artery = false))
+class RemoteDeliveryMultiJvmNode3 extends RemoteDeliverySpec(new RemoteDeliveryConfig(artery = false))
+
+class ArteryRemoteDeliveryMultiJvmNode1 extends RemoteDeliverySpec(new RemoteDeliveryConfig(artery = true))
+class ArteryRemoteDeliveryMultiJvmNode2 extends RemoteDeliverySpec(new RemoteDeliveryConfig(artery = true))
+class ArteryRemoteDeliveryMultiJvmNode3 extends RemoteDeliverySpec(new RemoteDeliveryConfig(artery = true))
+
+object RemoteDeliverySpec {
+  final case class Letter(n: Int, route: List[ActorRef]) extends CborSerializable
 
   class Postman extends Actor {
     def receive = {
-      case Letter(n, route) ⇒ route.head ! Letter(n, route.tail)
+      case Letter(n, route) => route.head ! Letter(n, route.tail)
     }
   }
-
 }
 
-class RemoteDeliveryMultiJvmNode1 extends RemoteDeliverySpec
-class RemoteDeliveryMultiJvmNode2 extends RemoteDeliverySpec
-class RemoteDeliveryMultiJvmNode3 extends RemoteDeliverySpec
-
-abstract class RemoteDeliverySpec
-  extends MultiNodeSpec(RemoteDeliveryMultiJvmSpec)
-  with STMultiNodeSpec with ImplicitSender {
-
-  import RemoteDeliveryMultiJvmSpec._
+abstract class RemoteDeliverySpec(multiNodeConfig: RemoteDeliveryConfig)
+    extends RemotingMultiNodeSpec(multiNodeConfig) {
+  import multiNodeConfig._
+  import RemoteDeliverySpec._
 
   override def initialParticipants = roles.size
 
@@ -52,9 +57,9 @@ abstract class RemoteDeliverySpec
     expectMsgType[ActorIdentity].ref.get
   }
 
-  "Remoting with TCP" must {
+  "Remote message delivery" must {
 
-    "not drop messages under normal circumstances" taggedAs LongRunningTest in {
+    "not drop messages under normal circumstances" in {
       system.actorOf(Props[Postman], "postman-" + myself.name)
       enterBarrier("actors-started")
 
@@ -64,7 +69,7 @@ abstract class RemoteDeliverySpec
         val p3 = identify(third, "postman-third")
         val route = p2 :: p3 :: p2 :: p3 :: testActor :: Nil
 
-        for (n ← 1 to 500) {
+        for (n <- 1 to 500) {
           p1 ! Letter(n, route)
           expectMsg(5.seconds, Letter(n, Nil))
           // in case the loop count is increased it is good with some progress feedback

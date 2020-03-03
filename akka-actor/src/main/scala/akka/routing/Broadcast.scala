@@ -1,16 +1,16 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.routing
 
 import scala.collection.immutable
-import akka.actor.ActorContext
-import akka.actor.Props
 import akka.dispatch.Dispatchers
 import com.typesafe.config.Config
 import akka.actor.SupervisorStrategy
 import akka.japi.Util.immutableSeq
 import akka.actor.ActorSystem
+import com.github.ghik.silencer.silent
 
 object BroadcastRoutingLogic {
   def apply(): BroadcastRoutingLogic = new BroadcastRoutingLogic
@@ -19,6 +19,7 @@ object BroadcastRoutingLogic {
 /**
  * Broadcasts a message to all its routees.
  */
+@silent("@SerialVersionUID has no effect")
 @SerialVersionUID(1L)
 final class BroadcastRoutingLogic extends RoutingLogic {
   override def select(message: Any, routees: immutable.IndexedSeq[Routee]): Routee =
@@ -58,16 +59,18 @@ final class BroadcastRoutingLogic extends RoutingLogic {
  */
 @SerialVersionUID(1L)
 final case class BroadcastPool(
-  nrOfInstances: Int, override val resizer: Option[Resizer] = None,
-  override val supervisorStrategy: SupervisorStrategy = Pool.defaultSupervisorStrategy,
-  override val routerDispatcher: String = Dispatchers.DefaultDispatcherId,
-  override val usePoolDispatcher: Boolean = false)
-  extends Pool with PoolOverrideUnsetConfig[BroadcastPool] {
+    nrOfInstances: Int,
+    override val resizer: Option[Resizer] = None,
+    override val supervisorStrategy: SupervisorStrategy = Pool.defaultSupervisorStrategy,
+    override val routerDispatcher: String = Dispatchers.DefaultDispatcherId,
+    override val usePoolDispatcher: Boolean = false)
+    extends Pool
+    with PoolOverrideUnsetConfig[BroadcastPool] {
 
   def this(config: Config) =
     this(
       nrOfInstances = config.getInt("nr-of-instances"),
-      resizer = DefaultResizer.fromConfig(config),
+      resizer = Resizer.fromConfig(config),
       usePoolDispatcher = config.hasPath("pool-dispatcher"))
 
   /**
@@ -97,7 +100,7 @@ final case class BroadcastPool(
   def withDispatcher(dispatcherId: String): BroadcastPool = copy(routerDispatcher = dispatcherId)
 
   /**
-   * Uses the resizer and/or the supervisor strategy of the given Routerconfig
+   * Uses the resizer and/or the supervisor strategy of the given RouterConfig
    * if this RouterConfig doesn't have one, i.e. the resizer defined in code is used if
    * resizer was not defined in config.
    */
@@ -120,9 +123,9 @@ final case class BroadcastPool(
  */
 @SerialVersionUID(1L)
 final case class BroadcastGroup(
-  paths: immutable.Iterable[String],
-  override val routerDispatcher: String = Dispatchers.DefaultDispatcherId)
-  extends Group {
+    paths: immutable.Iterable[String],
+    override val routerDispatcher: String = Dispatchers.DefaultDispatcherId)
+    extends Group {
 
   def this(config: Config) =
     this(paths = immutableSeq(config.getStringList("routees.paths")))
@@ -133,6 +136,8 @@ final case class BroadcastGroup(
    *   sent with [[akka.actor.ActorSelection]] to these paths
    */
   def this(routeePaths: java.lang.Iterable[String]) = this(paths = immutableSeq(routeePaths))
+
+  override def paths(system: ActorSystem): immutable.Iterable[String] = this.paths
 
   override def createRouter(system: ActorSystem): Router = new Router(BroadcastRoutingLogic())
 

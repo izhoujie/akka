@@ -1,46 +1,50 @@
+/*
+ * Copyright (C) 2018-2020 Lightbend Inc. <https://www.lightbend.com>
+ */
+
 package akka.remote
 
 import scala.concurrent.duration._
 import com.typesafe.config.ConfigFactory
 import akka.actor._
 import akka.testkit._
-import akka.remote.testkit.{ MultiNodeConfig, MultiNodeSpec, STMultiNodeSpec }
-import akka.remote.testconductor.RoleName
+import akka.remote.testkit.MultiNodeConfig
 
-object PiercingShouldKeepQuarantineSpec extends MultiNodeConfig {
+class PiercingShouldKeepQuarantineConfig(artery: Boolean) extends MultiNodeConfig {
   val first = role("first")
   val second = role("second")
 
-  commonConfig(debugConfig(on = false).withFallback(
-    ConfigFactory.parseString("""
-      #akka.loglevel = INFO
-      #akka.remote.log-remote-lifecycle-events = INFO
+  commonConfig(debugConfig(on = false).withFallback(ConfigFactory.parseString(s"""
       akka.remote.retry-gate-closed-for = 0.5s
-                              """)))
-
-  class Subject extends Actor {
-    def receive = {
-      case "getuid" ⇒ sender() ! AddressUidExtension(context.system).addressUid
-    }
-  }
+      akka.remote.artery.enabled = $artery
+      """)).withFallback(RemotingMultiNodeSpec.commonConfig))
 
 }
 
-class PiercingShouldKeepQuarantineSpecMultiJvmNode1 extends PiercingShouldKeepQuarantineSpec
-class PiercingShouldKeepQuarantineSpecMultiJvmNode2 extends PiercingShouldKeepQuarantineSpec
+class PiercingShouldKeepQuarantineSpecMultiJvmNode1
+    extends PiercingShouldKeepQuarantineSpec(new PiercingShouldKeepQuarantineConfig(artery = false))
+class PiercingShouldKeepQuarantineSpecMultiJvmNode2
+    extends PiercingShouldKeepQuarantineSpec(new PiercingShouldKeepQuarantineConfig(artery = false))
 
-abstract class PiercingShouldKeepQuarantineSpec extends MultiNodeSpec(PiercingShouldKeepQuarantineSpec)
-  with STMultiNodeSpec
-  with ImplicitSender {
+class ArteryPiercingShouldKeepQuarantineSpecMultiJvmNode1
+    extends PiercingShouldKeepQuarantineSpec(new PiercingShouldKeepQuarantineConfig(artery = true))
+class ArteryPiercingShouldKeepQuarantineSpecMultiJvmNode2
+    extends PiercingShouldKeepQuarantineSpec(new PiercingShouldKeepQuarantineConfig(artery = true))
 
+object PiercingShouldKeepQuarantineSpec {
+  class Subject extends Actor {
+    def receive = {
+      case "getuid" => sender() ! AddressUidExtension(context.system).longAddressUid
+    }
+  }
+}
+
+abstract class PiercingShouldKeepQuarantineSpec(multiNodeConfig: PiercingShouldKeepQuarantineConfig)
+    extends RemotingMultiNodeSpec(multiNodeConfig) {
+  import multiNodeConfig._
   import PiercingShouldKeepQuarantineSpec._
 
   override def initialParticipants = roles.size
-
-  def identify(role: RoleName, actorName: String): ActorRef = {
-    system.actorSelection(node(role) / "user" / actorName) ! Identify(1)
-    expectMsgType[ActorIdentity].ref.get
-  }
 
   "While probing through the quarantine remoting" must {
 
@@ -50,19 +54,19 @@ abstract class PiercingShouldKeepQuarantineSpec extends MultiNodeSpec(PiercingSh
 
         // Communicate with second system
         system.actorSelection(node(second) / "user" / "subject") ! "getuid"
-        val uid = expectMsgType[Int](10.seconds)
+        val uid = expectMsgType[Long](10.seconds)
         enterBarrier("actor-identified")
 
         // Manually Quarantine the other system
-        RARP(system).provider.transport.quarantine(node(second).address, Some(uid))
+        RARP(system).provider.transport.quarantine(node(second).address, Some(uid), "test")
 
         // Quarantining is not immediate
         Thread.sleep(1000)
 
         // Quarantine is up -- Should not be able to communicate with remote system any more
-        for (_ ← 1 to 4) {
+        for (_ <- 1 to 4) {
           system.actorSelection(node(second) / "user" / "subject") ! "getuid"
-          expectNoMsg(2.seconds)
+          expectNoMessage(2.seconds)
         }
 
         enterBarrier("quarantine-intact")

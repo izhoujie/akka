@@ -1,17 +1,18 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.actor;
 
 public class NonPublicClass {
-    public static Props createProps() {
-        return Props.create(MyNonPublicActorClass.class);
-    }
+  public static Props createProps() {
+    return Props.create(MyNonPublicActorClass.class);
+  }
 }
 
-class MyNonPublicActorClass extends UntypedActor {
-    @Override public void onReceive(Object msg) {
-        getSender().tell(msg, getSelf());
-    }
+class MyNonPublicActorClass extends UntypedAbstractActor {
+  @Override
+  public void onReceive(Object msg) {
+    getSender().tell(msg, getSelf());
+  }
 }

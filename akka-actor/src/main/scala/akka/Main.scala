@@ -1,5 +1,5 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka
@@ -18,6 +18,7 @@ import scala.util.control.NonFatal
  * top level application supervisor actor. It will shutdown
  * the actor system when the top level actor is terminated.
  */
+@deprecated("Implement your own main class instead, from which you start the ActorSystem and actors.", "2.6.0")
 object Main {
 
   /**
@@ -31,17 +32,17 @@ object Main {
       try {
         val appClass = system.asInstanceOf[ExtendedActorSystem].dynamicAccess.getClassFor[Actor](args(0)).get
         val app = system.actorOf(Props(appClass), "app")
-        val terminator = system.actorOf(Props(classOf[Terminator], app), "app-terminator")
+        system.actorOf(Props(classOf[Terminator], app), "app-terminator")
       } catch {
-        case NonFatal(e) ⇒ system.terminate(); throw e
+        case NonFatal(e) => system.terminate(); throw e
       }
     }
   }
 
   class Terminator(app: ActorRef) extends Actor with ActorLogging {
-    context watch app
+    context.watch(app)
     def receive = {
-      case Terminated(_) ⇒
+      case Terminated(_) =>
         log.info("application supervisor has terminated, shutting down")
         context.system.terminate()
     }

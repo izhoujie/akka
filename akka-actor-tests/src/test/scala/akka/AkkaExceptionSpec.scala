@@ -1,15 +1,19 @@
-package akka;
+/*
+ * Copyright (C) 2018-2020 Lightbend Inc. <https://www.lightbend.com>
+ */
+
+package akka
 
 import akka.actor._
-import org.scalatest.Matchers
-import org.scalatest.WordSpec;
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AnyWordSpec
 
 /**
  * A spec that verified that the AkkaException has at least a single argument constructor of type String.
  *
  * This is required to make Akka Exceptions be friends with serialization/deserialization.
  */
-class AkkaExceptionSpec extends WordSpec with Matchers {
+class AkkaExceptionSpec extends AnyWordSpec with Matchers {
 
   "AkkaException" must {
     "have a AkkaException(String msg) constructor to be serialization friendly" in {
@@ -22,7 +26,7 @@ class AkkaExceptionSpec extends WordSpec with Matchers {
     }
   }
 
-  def verify(clazz: java.lang.Class[_]) {
+  def verify(clazz: java.lang.Class[_]): Unit = {
     clazz.getConstructor(Array(classOf[String]): _*)
   }
 }

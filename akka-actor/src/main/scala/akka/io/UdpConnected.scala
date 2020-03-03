@@ -1,15 +1,19 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.io
 
-import java.lang.{ Iterable ⇒ JIterable }
+import java.lang.{ Iterable => JIterable }
 import java.net.InetSocketAddress
+
 import scala.collection.immutable
 import akka.io.Inet.SocketOption
 import akka.io.Udp.UdpSettings
 import akka.util.ByteString
 import akka.actor._
+import akka.util.ccompat._
+import com.github.ghik.silencer.silent
 
 /**
  * UDP Extension for Akka’s IO layer.
@@ -23,6 +27,7 @@ import akka.actor._
  *
  * The Java API for generating UDP commands is available at [[UdpConnectedMessage]].
  */
+@ccompatUsedUntil213
 object UdpConnected extends ExtensionId[UdpConnectedExt] with ExtensionIdProvider {
 
   override def lookup = UdpConnected
@@ -33,6 +38,7 @@ object UdpConnected extends ExtensionId[UdpConnectedExt] with ExtensionIdProvide
    * Java API: retrieve the UdpConnected extension for the given system.
    */
   override def get(system: ActorSystem): UdpConnectedExt = super.get(system)
+  override def get(system: ClassicActorSystemProvider): UdpConnectedExt = super.get(system)
 
   /**
    * The common interface for [[Command]] and [[Event]].
@@ -69,8 +75,10 @@ object UdpConnected extends ExtensionId[UdpConnectedExt] with ExtensionIdProvide
    * has been successfully enqueued to the O/S kernel.
    */
   final case class Send(payload: ByteString, ack: Any) extends Command {
-    require(ack
-      != null, "ack must be non-null. Use NoAck if you don't want acks.")
+    require(
+      ack
+        != null,
+      "ack must be non-null. Use NoAck if you don't want acks.")
 
     def wantsAck: Boolean = !ack.isInstanceOf[NoAck]
   }
@@ -84,10 +92,13 @@ object UdpConnected extends ExtensionId[UdpConnectedExt] with ExtensionIdProvide
    * which is restricted to sending to and receiving from the given `remoteAddress`.
    * All received datagrams will be sent to the designated `handler` actor.
    */
-  final case class Connect(handler: ActorRef,
-                           remoteAddress: InetSocketAddress,
-                           localAddress: Option[InetSocketAddress] = None,
-                           options: immutable.Traversable[SocketOption] = Nil) extends Command
+  @silent("deprecated")
+  final case class Connect(
+      handler: ActorRef,
+      remoteAddress: InetSocketAddress,
+      localAddress: Option[InetSocketAddress] = None,
+      options: immutable.Traversable[SocketOption] = Nil)
+      extends Command
 
   /**
    * Send this message to a connection actor (which had previously sent the
@@ -100,13 +111,13 @@ object UdpConnected extends ExtensionId[UdpConnectedExt] with ExtensionIdProvide
    * Send this message to a listener actor (which sent a [[Udp.Bound]] message) to
    * have it stop reading datagrams from the network. If the O/S kernel’s receive
    * buffer runs full then subsequent datagrams will be silently discarded.
-   * Re-enable reading from the socket using the [[ResumeReading]] command.
+   * Re-enable reading from the socket using the `ResumeReading` command.
    */
   case object SuspendReading extends Command
 
   /**
    * This message must be sent to the listener actor to re-enable reading from
-   * the socket after a [[SuspendReading]] command.
+   * the socket after a `SuspendReading` command.
    */
   case object ResumeReading extends Command
 
@@ -137,7 +148,7 @@ object UdpConnected extends ExtensionId[UdpConnectedExt] with ExtensionIdProvide
 
   /**
    * This message is sent by the connection actor to the actor which sent the
-   * [[Disconnect]] message when the UDP socket has been closed.
+   * `Disconnect` message when the UDP socket has been closed.
    */
   sealed trait Disconnected extends Event
   case object Disconnected extends Disconnected
@@ -150,7 +161,9 @@ class UdpConnectedExt(system: ExtendedActorSystem) extends IO.Extension {
 
   val manager: ActorRef = {
     system.systemActorOf(
-      props = Props(classOf[UdpConnectedManager], this).withDeploy(Deploy.local),
+      props = Props(classOf[UdpConnectedManager], this)
+        .withDispatcher(settings.ManagementDispatcher)
+        .withDeploy(Deploy.local),
       name = "IO-UDP-CONN")
   }
 
@@ -176,21 +189,22 @@ object UdpConnectedMessage {
    * which is restricted to sending to and receiving from the given `remoteAddress`.
    * All received datagrams will be sent to the designated `handler` actor.
    */
-  def connect(handler: ActorRef,
-              remoteAddress: InetSocketAddress,
-              localAddress: InetSocketAddress,
-              options: JIterable[SocketOption]): Command = Connect(handler, remoteAddress, Some(localAddress), options)
+  def connect(
+      handler: ActorRef,
+      remoteAddress: InetSocketAddress,
+      localAddress: InetSocketAddress,
+      options: JIterable[SocketOption]): Command = Connect(handler, remoteAddress, Some(localAddress), options)
+
   /**
    * Connect without specifying the `localAddress`.
    */
-  def connect(handler: ActorRef,
-              remoteAddress: InetSocketAddress,
-              options: JIterable[SocketOption]): Command = Connect(handler, remoteAddress, None, options)
+  def connect(handler: ActorRef, remoteAddress: InetSocketAddress, options: JIterable[SocketOption]): Command =
+    Connect(handler, remoteAddress, None, options)
+
   /**
    * Connect without specifying the `localAddress` or `options`.
    */
-  def connect(handler: ActorRef,
-              remoteAddress: InetSocketAddress): Command = Connect(handler, remoteAddress, None, Nil)
+  def connect(handler: ActorRef, remoteAddress: InetSocketAddress): Command = Connect(handler, remoteAddress, None, Nil)
 
   /**
    * This message is understood by the connection actors to send data to their
@@ -201,6 +215,7 @@ object UdpConnectedMessage {
    * has been successfully enqueued to the O/S kernel.
    */
   def send(data: ByteString, ack: AnyRef): Command = Send(data, ack)
+
   /**
    * Send without requesting acknowledgment.
    */
@@ -231,18 +246,18 @@ object UdpConnectedMessage {
    * Send this message to a listener actor (which sent a [[Udp.Bound]] message) to
    * have it stop reading datagrams from the network. If the O/S kernel’s receive
    * buffer runs full then subsequent datagrams will be silently discarded.
-   * Re-enable reading from the socket using the [[UdpConnected.ResumeReading]] command.
+   * Re-enable reading from the socket using the `UdpConnected.ResumeReading` command.
    */
   def suspendReading: Command = SuspendReading
 
   /**
    * This message must be sent to the listener actor to re-enable reading from
-   * the socket after a [[UdpConnected.SuspendReading]] command.
+   * the socket after a `UdpConnected.SuspendReading` command.
    */
   def resumeReading: Command = ResumeReading
 
-  implicit private def fromJava[T](coll: JIterable[T]): immutable.Traversable[T] = {
-    import scala.collection.JavaConverters._
-    coll.asScala.to[immutable.Traversable]
+  implicit private def fromJava[T](coll: JIterable[T]): immutable.Iterable[T] = {
+    import akka.util.ccompat.JavaConverters._
+    coll.asScala.to(immutable.Iterable)
   }
 }

@@ -1,15 +1,15 @@
-/**
- * Copyright (C) 2013-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2013-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.testkit
 
-import org.scalatest.{ WordSpec, BeforeAndAfterAll }
-import org.scalatest.Matchers
 import akka.actor.ActorSystem
+import org.scalatest.BeforeAndAfterAll
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.wordspec.AnyWordSpec
 
-@org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
-class ImplicitSenderSpec
-  extends WordSpec with Matchers with BeforeAndAfterAll with TestKitBase with ImplicitSender {
+class ImplicitSenderSpec extends AnyWordSpec with Matchers with BeforeAndAfterAll with TestKitBase with ImplicitSender {
 
   implicit lazy val system = ActorSystem("AkkaCustomSpec")
 

@@ -1,5 +1,5 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.actor
@@ -7,15 +7,35 @@ package akka.actor
 import java.util.concurrent.atomic.AtomicReference
 
 import akka.routing._
-import akka.util.WildcardTree
+import akka.util.WildcardIndex
+import com.github.ghik.silencer.silent
 import com.typesafe.config._
-
 import scala.annotation.tailrec
+
+import akka.annotation.InternalApi
 
 object Deploy {
   final val NoDispatcherGiven = ""
   final val NoMailboxGiven = ""
   val local = Deploy(scope = LocalScope)
+
+  /**
+   * INTERNAL API
+   */
+  @InternalApi private[akka] final val DispatcherSameAsParent = ".."
+
+  def apply(
+      path: String = "",
+      config: Config = ConfigFactory.empty,
+      routerConfig: RouterConfig = NoRouter,
+      scope: Scope = NoScopeGiven,
+      dispatcher: String = Deploy.NoDispatcherGiven,
+      mailbox: String = Deploy.NoMailboxGiven): Deploy =
+    new Deploy(path, config, routerConfig, scope, dispatcher, mailbox, Set.empty)
+
+  // for bincomp, pre 2.6 was case class
+  def unapply(deploy: Deploy): Option[(String, Config, RouterConfig, Scope, String, String)] =
+    Some((deploy.path, deploy.config, deploy.routerConfig, deploy.scope, deploy.dispatcher, deploy.mailbox))
 }
 
 /**
@@ -33,14 +53,27 @@ object Deploy {
  * val remoteProps = someProps.withDeploy(Deploy(scope = RemoteScope("someOtherNodeName")))
  * }}}
  */
-@SerialVersionUID(2L)
-final case class Deploy(
-  path: String = "",
-  config: Config = ConfigFactory.empty,
-  routerConfig: RouterConfig = NoRouter,
-  scope: Scope = NoScopeGiven,
-  dispatcher: String = Deploy.NoDispatcherGiven,
-  mailbox: String = Deploy.NoMailboxGiven) {
+@SerialVersionUID(3L)
+final class Deploy(
+    val path: String = "",
+    val config: Config = ConfigFactory.empty,
+    val routerConfig: RouterConfig = NoRouter,
+    val scope: Scope = NoScopeGiven,
+    val dispatcher: String = Deploy.NoDispatcherGiven,
+    val mailbox: String = Deploy.NoMailboxGiven,
+    val tags: Set[String] = Set.empty)
+    extends Serializable
+    with Product
+    with Equals {
+
+  // for bincomp, pre 2.6 did not have tags
+  def this(
+      path: String,
+      config: Config,
+      routerConfig: RouterConfig,
+      scope: Scope,
+      dispatcher: String,
+      mailbox: String) = this(path, config, routerConfig, scope, dispatcher, mailbox, Set.empty)
 
   /**
    * Java API to create a Deploy with the given RouterConfig
@@ -60,7 +93,7 @@ final case class Deploy(
   /**
    * Do a merge between this and the other Deploy, where values from “this” take
    * precedence. The “path” of the other Deploy is not taken into account. All
-   * other members are merged using ``<X>.withFallback(other.<X>)``.
+   * other members are merged using `X.withFallback(other.X)`.
    */
   def withFallback(other: Deploy): Deploy = {
     Deploy(
@@ -71,6 +104,52 @@ final case class Deploy(
       if (dispatcher == Deploy.NoDispatcherGiven) other.dispatcher else dispatcher,
       if (mailbox == Deploy.NoMailboxGiven) other.mailbox else mailbox)
   }
+
+  def withTags(tags: Set[String]): Deploy =
+    new Deploy(path, config, routerConfig, scope, dispatcher, mailbox, tags)
+
+  // below are for bincomp, pre 2.6 was case class
+  def copy(
+      path: String = path,
+      config: Config = config,
+      routerConfig: RouterConfig = routerConfig,
+      scope: Scope = scope,
+      dispatcher: String = dispatcher,
+      mailbox: String = mailbox): Deploy =
+    new Deploy(path, config, routerConfig, scope, dispatcher, mailbox, tags)
+
+  override def productElement(n: Int): Any = n match {
+    case 1 => path
+    case 2 => config
+    case 3 => routerConfig
+    case 4 => scope
+    case 5 => dispatcher
+    case 6 => mailbox
+    case 7 => tags
+  }
+
+  override def productArity: Int = 7
+
+  override def canEqual(that: Any): Boolean = that.isInstanceOf[Deploy]
+
+  override def equals(other: Any): Boolean = other match {
+    case that: Deploy =>
+      path == that.path &&
+      config == that.config &&
+      routerConfig == that.routerConfig &&
+      scope == that.scope &&
+      dispatcher == that.dispatcher &&
+      mailbox == that.mailbox &&
+      tags == that.tags
+    case _ => false
+  }
+
+  override def hashCode(): Int = {
+    val state = Seq[AnyRef](path, config, routerConfig, scope, dispatcher, mailbox, tags)
+    state.map(_.hashCode()).foldLeft(0)((a, b) => 31 * a + b)
+  }
+
+  override def toString = s"Deploy($path, $config, $routerConfig, $scope, $dispatcher, $mailbox, $tags)"
 }
 
 /**
@@ -81,6 +160,7 @@ final case class Deploy(
  * Akka actors fully extensible.
  */
 trait Scope {
+
   /**
    * When merging [[akka.actor.Deploy]] instances using ``withFallback()`` on
    * the left one, this is propagated to “merging” scopes in the same way.
@@ -91,6 +171,7 @@ trait Scope {
   def withFallback(other: Scope): Scope
 }
 
+@silent("@SerialVersionUID has no effect")
 @SerialVersionUID(1L)
 abstract class LocalScope extends Scope
 
@@ -99,8 +180,10 @@ abstract class LocalScope extends Scope
  * which do not set a different scope. It is also the only scope handled by
  * the LocalActorRefProvider.
  */
+@silent("@SerialVersionUID has no effect")
 @SerialVersionUID(1L)
 case object LocalScope extends LocalScope {
+
   /**
    * Java API: get the singleton instance
    */
@@ -112,6 +195,7 @@ case object LocalScope extends LocalScope {
 /**
  * This is the default value and as such allows overrides.
  */
+@silent("@SerialVersionUID has no effect")
 @SerialVersionUID(1L)
 abstract class NoScopeGiven extends Scope
 @SerialVersionUID(1L)
@@ -129,37 +213,43 @@ case object NoScopeGiven extends NoScopeGiven {
  */
 private[akka] class Deployer(val settings: ActorSystem.Settings, val dynamicAccess: DynamicAccess) {
 
-  import scala.collection.JavaConverters._
+  import akka.util.ccompat.JavaConverters._
 
   private val resizerEnabled: Config = ConfigFactory.parseString("resizer.enabled=on")
-  private val deployments = new AtomicReference(WildcardTree[Deploy]())
+  private val deployments = new AtomicReference(WildcardIndex[Deploy]())
   private val config = settings.config.getConfig("akka.actor.deployment")
   protected val default = config.getConfig("default")
   val routerTypeMapping: Map[String, String] =
-    settings.config.getConfig("akka.actor.router.type-mapping").root.unwrapped.asScala.collect {
-      case (key, value: String) ⇒ (key -> value)
-    }.toMap
+    settings.config
+      .getConfig("akka.actor.router.type-mapping")
+      .root
+      .unwrapped
+      .asScala
+      .collect {
+        case (key, value: String) => (key -> value)
+      }
+      .toMap
 
-  config.root.asScala flatMap {
-    case ("default", _)             ⇒ None
-    case (key, value: ConfigObject) ⇒ parseConfig(key, value.toConfig)
-    case _                          ⇒ None
-  } foreach deploy
+  config.root.asScala
+    .flatMap {
+      case ("default", _)             => None
+      case (key, value: ConfigObject) => parseConfig(key, value.toConfig)
+      case _                          => None
+    }
+    .foreach(deploy)
 
-  def lookup(path: ActorPath): Option[Deploy] = lookup(path.elements.drop(1).iterator)
+  def lookup(path: ActorPath): Option[Deploy] = lookup(path.elements.drop(1))
 
-  def lookup(path: Iterable[String]): Option[Deploy] = lookup(path.iterator)
-
-  def lookup(path: Iterator[String]): Option[Deploy] = deployments.get().find(path).data
+  def lookup(path: Iterable[String]): Option[Deploy] = deployments.get().find(path)
 
   def deploy(d: Deploy): Unit = {
-    @tailrec def add(path: Array[String], d: Deploy, w: WildcardTree[Deploy] = deployments.get): Unit = {
-      for (i ← 0 until path.length) path(i) match {
-        case "" ⇒ throw new InvalidActorNameException(s"Actor name in deployment [${d.path}] must not be empty")
-        case el ⇒ ActorPath.validatePathElement(el, fullPath = d.path)
+    @tailrec def add(path: Array[String], d: Deploy, w: WildcardIndex[Deploy] = deployments.get): Unit = {
+      for (i <- path.indices) path(i) match {
+        case "" => throw InvalidActorNameException(s"Actor name in deployment [${d.path}] must not be empty")
+        case el => ActorPath.validatePathElement(el, fullPath = d.path)
       }
 
-      if (!deployments.compareAndSet(w, w.insert(path.iterator, d))) add(path, d)
+      if (!deployments.compareAndSet(w, w.insert(path, d))) add(path, d)
     }
 
     add(d.path.split("/").drop(1), d)
@@ -194,21 +284,28 @@ private[akka] class Deployer(val settings: ActorSystem.Settings, val dynamicAcce
       def throwCannotInstantiateRouter(args: Seq[(Class[_], AnyRef)], cause: Throwable) =
         throw new IllegalArgumentException(
           s"Cannot instantiate router [$fqn], defined in [$key], " +
-            s"make sure it extends [${classOf[RouterConfig]}] and has constructor with " +
-            s"[${args(0)._1.getName}] and optional [${args(1)._1.getName}] parameter", cause)
+          s"make sure it extends [${classOf[RouterConfig]}] and has constructor with " +
+          s"[${args(0)._1.getName}] and optional [${args(1)._1.getName}] parameter",
+          cause)
 
       // first try with Config param, and then with Config and DynamicAccess parameters
       val args1 = List(classOf[Config] -> deployment2)
       val args2 = List(classOf[Config] -> deployment2, classOf[DynamicAccess] -> dynamicAccess)
-      dynamicAccess.createInstanceFor[RouterConfig](fqn, args1).recover({
-        case e @ (_: IllegalArgumentException | _: ConfigException) ⇒ throw e
-        case e: NoSuchMethodException ⇒
-          dynamicAccess.createInstanceFor[RouterConfig](fqn, args2).recover({
-            case e @ (_: IllegalArgumentException | _: ConfigException) ⇒ throw e
-            case e2 ⇒ throwCannotInstantiateRouter(args2, e)
-          }).get
-        case e ⇒ throwCannotInstantiateRouter(args2, e)
-      }).get
+      dynamicAccess
+        .createInstanceFor[RouterConfig](fqn, args1)
+        .recover {
+          case e @ (_: IllegalArgumentException | _: ConfigException) => throw e
+          case e: NoSuchMethodException =>
+            dynamicAccess
+              .createInstanceFor[RouterConfig](fqn, args2)
+              .recover {
+                case e @ (_: IllegalArgumentException | _: ConfigException) => throw e
+                case _                                                      => throwCannotInstantiateRouter(args2, e)
+              }
+              .get
+          case e => throwCannotInstantiateRouter(args2, e)
+        }
+        .get
     }
 
 }

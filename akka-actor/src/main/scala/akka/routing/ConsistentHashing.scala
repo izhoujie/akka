@@ -1,11 +1,11 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
+
 package akka.routing
 
 import scala.collection.immutable
-import akka.actor.ActorContext
-import akka.actor.Props
+
 import akka.dispatch.Dispatchers
 import com.typesafe.config.Config
 import akka.actor.SupervisorStrategy
@@ -14,11 +14,13 @@ import akka.actor.Address
 import akka.actor.ExtendedActorSystem
 import akka.actor.ActorSystem
 import java.util.concurrent.atomic.AtomicReference
-import akka.actor.ActorRef
+
 import akka.serialization.SerializationExtension
 import scala.util.control.NonFatal
+
 import akka.event.Logging
 import akka.actor.ActorPath
+import akka.actor.WrappedMessage
 
 object ConsistentHashingRouter {
 
@@ -52,7 +54,9 @@ object ConsistentHashingRouter {
    */
   @SerialVersionUID(1L)
   final case class ConsistentHashableEnvelope(message: Any, hashKey: Any)
-    extends ConsistentHashable with RouterEnvelope {
+      extends ConsistentHashable
+      with RouterEnvelope
+      with WrappedMessage {
     override def consistentHashKey: Any = hashKey
   }
 
@@ -94,13 +98,14 @@ object ConsistentHashingRouter {
    * INTERNAL API
    */
   private[akka] def hashMappingAdapter(mapper: ConsistentHashMapper): ConsistentHashMapping = {
-    case message if (mapper.hashKey(message).asInstanceOf[AnyRef] ne null) ⇒
+    case message if mapper.hashKey(message).asInstanceOf[AnyRef] ne null =>
       mapper.hashKey(message)
   }
 
 }
 
 object ConsistentHashingRoutingLogic {
+
   /**
    * Address to use for the selfAddress parameter
    */
@@ -121,7 +126,7 @@ object ConsistentHashingRoutingLogic {
  * The key is part of the message and it's convenient to define it together
  * with the message definition.
  *
- * 3. The messages can be be wrapped in a [[akka.routing.ConsistentHashingRouter.ConsistentHashableEnvelope]]
+ * 3. The messages can be wrapped in a [[akka.routing.ConsistentHashingRouter.ConsistentHashableEnvelope]]
  * to define what data to use for the consistent hash key. The sender knows
  * the key to use.
  *
@@ -138,10 +143,10 @@ object ConsistentHashingRoutingLogic {
  */
 @SerialVersionUID(1L)
 final case class ConsistentHashingRoutingLogic(
-  system: ActorSystem,
-  virtualNodesFactor: Int = 0,
-  hashMapping: ConsistentHashingRouter.ConsistentHashMapping = ConsistentHashingRouter.emptyConsistentHashMapping)
-  extends RoutingLogic {
+    system: ActorSystem,
+    virtualNodesFactor: Int = 0,
+    hashMapping: ConsistentHashingRouter.ConsistentHashMapping = ConsistentHashingRouter.emptyConsistentHashMapping)
+    extends RoutingLogic {
 
   import ConsistentHashingRouter._
 
@@ -152,7 +157,17 @@ final case class ConsistentHashingRoutingLogic(
   def this(system: ActorSystem) =
     this(system, virtualNodesFactor = 0, hashMapping = ConsistentHashingRouter.emptyConsistentHashMapping)
 
-  private val selfAddress = system.asInstanceOf[ExtendedActorSystem].provider.getDefaultAddress
+  private lazy val selfAddress = {
+    // Important that this is lazy, because consistent hashing routing pool is used by SimpleDnsManager
+    // that can be activated early, before the transport defaultAddress is set in the startup.
+    // See issue #20263.
+    // If defaultAddress is not available the message will not be routed, but new attempt
+    // is performed for next message.
+    val a = ConsistentHashingRoutingLogic.defaultAddress(system)
+    if (a == null)
+      throw new IllegalStateException("defaultAddress not available yet")
+    a
+  }
   val vnodes =
     if (virtualNodesFactor == 0) system.settings.DefaultVirtualNodesFactor
     else virtualNodesFactor
@@ -171,7 +186,8 @@ final case class ConsistentHashingRoutingLogic(
     copy(hashMapping = ConsistentHashingRouter.hashMappingAdapter(mapper))
 
   // tuple of routees and the ConsistentHash, updated together in updateConsistentHash
-  private val consistentHashRef = new AtomicReference[(immutable.IndexedSeq[Routee], ConsistentHash[ConsistentRoutee])]((null, null))
+  private val consistentHashRef =
+    new AtomicReference[(immutable.IndexedSeq[Routee], ConsistentHash[ConsistentRoutee])]((null, null))
 
   override def select(message: Any, routees: immutable.IndexedSeq[Routee]): Routee =
     if (routees.isEmpty) NoRoutee
@@ -194,27 +210,30 @@ final case class ConsistentHashingRoutingLogic(
         } else oldConsistentHash
       }
 
-      def target(hashData: Any): Routee = try {
-        val currentConsistenHash = updateConsistentHash()
-        if (currentConsistenHash.isEmpty) NoRoutee
-        else hashData match {
-          case bytes: Array[Byte] ⇒ currentConsistenHash.nodeFor(bytes).routee
-          case str: String        ⇒ currentConsistenHash.nodeFor(str).routee
-          case x: AnyRef          ⇒ currentConsistenHash.nodeFor(SerializationExtension(system).serialize(x).get).routee
+      def target(hashData: Any): Routee =
+        try {
+          val currentConsistenHash = updateConsistentHash()
+          if (currentConsistenHash.isEmpty) NoRoutee
+          else
+            hashData match {
+              case bytes: Array[Byte] => currentConsistenHash.nodeFor(bytes).routee
+              case str: String        => currentConsistenHash.nodeFor(str).routee
+              case x: AnyRef          => currentConsistenHash.nodeFor(SerializationExtension(system).serialize(x).get).routee
+            }
+        } catch {
+          case NonFatal(e) =>
+            log.warning("Couldn't route message with consistent hash key [{}] due to [{}]", hashData, e.getMessage)
+            NoRoutee
         }
-      } catch {
-        case NonFatal(e) ⇒
-          // serialization failed
-          log.warning("Couldn't route message with consistent hash key [{}] due to [{}]", hashData, e.getMessage)
-          NoRoutee
-      }
 
       message match {
-        case _ if hashMapping.isDefinedAt(message) ⇒ target(hashMapping(message))
-        case hashable: ConsistentHashable          ⇒ target(hashable.consistentHashKey)
-        case other ⇒
-          log.warning("Message [{}] must be handled by hashMapping, or implement [{}] or be wrapped in [{}]",
-            message.getClass.getName, classOf[ConsistentHashable].getName,
+        case _ if hashMapping.isDefinedAt(message) => target(hashMapping(message))
+        case hashable: ConsistentHashable          => target(hashable.consistentHashKey)
+        case _ =>
+          log.warning(
+            "Message [{}] must be handled by hashMapping, or implement [{}] or be wrapped in [{}]",
+            message.getClass.getName,
+            classOf[ConsistentHashable].getName,
             classOf[ConsistentHashableEnvelope].getName)
           NoRoutee
       }
@@ -260,19 +279,20 @@ final case class ConsistentHashingRoutingLogic(
  */
 @SerialVersionUID(1L)
 final case class ConsistentHashingPool(
-  val nrOfInstances: Int,
-  override val resizer: Option[Resizer] = None,
-  val virtualNodesFactor: Int = 0,
-  val hashMapping: ConsistentHashingRouter.ConsistentHashMapping = ConsistentHashingRouter.emptyConsistentHashMapping,
-  override val supervisorStrategy: SupervisorStrategy = Pool.defaultSupervisorStrategy,
-  override val routerDispatcher: String = Dispatchers.DefaultDispatcherId,
-  override val usePoolDispatcher: Boolean = false)
-  extends Pool with PoolOverrideUnsetConfig[ConsistentHashingPool] {
+    nrOfInstances: Int,
+    override val resizer: Option[Resizer] = None,
+    virtualNodesFactor: Int = 0,
+    hashMapping: ConsistentHashingRouter.ConsistentHashMapping = ConsistentHashingRouter.emptyConsistentHashMapping,
+    override val supervisorStrategy: SupervisorStrategy = Pool.defaultSupervisorStrategy,
+    override val routerDispatcher: String = Dispatchers.DefaultDispatcherId,
+    override val usePoolDispatcher: Boolean = false)
+    extends Pool
+    with PoolOverrideUnsetConfig[ConsistentHashingPool] {
 
   def this(config: Config) =
     this(
       nrOfInstances = config.getInt("nr-of-instances"),
-      resizer = DefaultResizer.fromConfig(config),
+      resizer = Resizer.fromConfig(config),
       usePoolDispatcher = config.hasPath("pool-dispatcher"))
 
   /**
@@ -314,15 +334,15 @@ final case class ConsistentHashingPool(
     copy(hashMapping = ConsistentHashingRouter.hashMappingAdapter(mapper))
 
   /**
-   * Uses the resizer and/or the supervisor strategy of the given Routerconfig
+   * Uses the resizer and/or the supervisor strategy of the given RouterConfig
    * if this RouterConfig doesn't have one, i.e. the resizer defined in code is used if
    * resizer was not defined in config.
-   * Uses the the `hashMapping` defined in code, since that can't be defined in configuration.
+   * Uses the `hashMapping` defined in code, since that can't be defined in configuration.
    */
   override def withFallback(other: RouterConfig): RouterConfig = other match {
-    case _: FromConfig | _: NoRouter        ⇒ this.overrideUnsetConfig(other)
-    case otherRouter: ConsistentHashingPool ⇒ (copy(hashMapping = otherRouter.hashMapping)).overrideUnsetConfig(other)
-    case _                                  ⇒ throw new IllegalArgumentException("Expected ConsistentHashingPool, got [%s]".format(other))
+    case _: FromConfig | _: NoRouter        => this.overrideUnsetConfig(other)
+    case otherRouter: ConsistentHashingPool => (copy(hashMapping = otherRouter.hashMapping)).overrideUnsetConfig(other)
+    case _                                  => throw new IllegalArgumentException("Expected ConsistentHashingPool, got [%s]".format(other))
   }
 
 }
@@ -348,11 +368,11 @@ final case class ConsistentHashingPool(
  */
 @SerialVersionUID(1L)
 final case class ConsistentHashingGroup(
-  override val paths: immutable.Iterable[String],
-  val virtualNodesFactor: Int = 0,
-  val hashMapping: ConsistentHashingRouter.ConsistentHashMapping = ConsistentHashingRouter.emptyConsistentHashMapping,
-  override val routerDispatcher: String = Dispatchers.DefaultDispatcherId)
-  extends Group {
+    paths: immutable.Iterable[String],
+    virtualNodesFactor: Int = 0,
+    hashMapping: ConsistentHashingRouter.ConsistentHashMapping = ConsistentHashingRouter.emptyConsistentHashMapping,
+    override val routerDispatcher: String = Dispatchers.DefaultDispatcherId)
+    extends Group {
 
   def this(config: Config) =
     this(paths = immutableSeq(config.getStringList("routees.paths")))
@@ -363,6 +383,8 @@ final case class ConsistentHashingGroup(
    *   sent with [[akka.actor.ActorSelection]] to these paths
    */
   def this(routeePaths: java.lang.Iterable[String]) = this(paths = immutableSeq(routeePaths))
+
+  override def paths(system: ActorSystem): immutable.Iterable[String] = this.paths
 
   override def createRouter(system: ActorSystem): Router =
     new Router(ConsistentHashingRoutingLogic(system, virtualNodesFactor, hashMapping))
@@ -385,12 +407,12 @@ final case class ConsistentHashingGroup(
     copy(hashMapping = ConsistentHashingRouter.hashMappingAdapter(mapper))
 
   /**
-   * Uses the the `hashMapping` defined in code, since that can't be defined in configuration.
+   * Uses the `hashMapping` defined in code, since that can't be defined in configuration.
    */
   override def withFallback(other: RouterConfig): RouterConfig = other match {
-    case _: FromConfig | _: NoRouter         ⇒ super.withFallback(other)
-    case otherRouter: ConsistentHashingGroup ⇒ copy(hashMapping = otherRouter.hashMapping)
-    case _                                   ⇒ throw new IllegalArgumentException("Expected ConsistentHashingGroup, got [%s]".format(other))
+    case _: FromConfig | _: NoRouter         => super.withFallback(other)
+    case otherRouter: ConsistentHashingGroup => copy(hashMapping = otherRouter.hashMapping)
+    case _                                   => throw new IllegalArgumentException("Expected ConsistentHashingGroup, got [%s]".format(other))
   }
 
 }
@@ -406,15 +428,15 @@ final case class ConsistentHashingGroup(
 private[akka] final case class ConsistentRoutee(routee: Routee, selfAddress: Address) {
 
   override def toString: String = routee match {
-    case ActorRefRoutee(ref)       ⇒ toStringWithfullAddress(ref.path)
-    case ActorSelectionRoutee(sel) ⇒ toStringWithfullAddress(sel.anchorPath) + sel.pathString
-    case other                     ⇒ other.toString
+    case ActorRefRoutee(ref)       => toStringWithfullAddress(ref.path)
+    case ActorSelectionRoutee(sel) => toStringWithfullAddress(sel.anchorPath) + sel.pathString
+    case other                     => other.toString
   }
 
   private def toStringWithfullAddress(path: ActorPath): String = {
     path.address match {
-      case Address(_, _, None, None) ⇒ path.toStringWithAddress(selfAddress)
-      case a                         ⇒ path.toString
+      case Address(_, _, None, None) => path.toStringWithAddress(selfAddress)
+      case _                         => path.toString
     }
   }
 }

@@ -1,9 +1,8 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
-package akka.actor
 
-import scala.reflect.ClassTag
+package akka.actor
 
 /**
  * The basic ActorSystem covers all that is needed for locally running actors,
@@ -32,6 +31,7 @@ import scala.reflect.ClassTag
  *
  *   // Java API: retrieve the extension for the given system.
  *   override def get(system: ActorSystem): UdpExt = super.get(system)
+ *   override def get(system: ClassicActorSystemProvider): UdpExt = super.get(system)
  * }
  *
  * class Ext(system: ExtendedActorSystem) extends Extension {
@@ -61,8 +61,6 @@ import scala.reflect.ClassTag
  *    ...
  * }
  * }}}
- *
- * See also [[akka.actor.ExtensionKey]] for a concise way of formulating extensions.
  */
 trait Extension
 
@@ -76,12 +74,19 @@ trait ExtensionId[T <: Extension] {
   /**
    * Returns an instance of the extension identified by this ExtensionId instance.
    */
-  def apply(system: ActorSystem): T = system.registerExtension(this)
+  def apply(system: ActorSystem): T = {
+    java.util.Objects.requireNonNull(system, "system must not be null!").registerExtension(this)
+  }
+
+  /**
+   * Returns an instance of the extension identified by this ExtensionId instance.
+   */
+  def apply(system: ClassicActorSystemProvider): T = apply(system.classicSystem)
 
   /**
    * Returns an instance of the extension identified by this ExtensionId instance.
    * Java API
-   * For extensions written in Scala that are to be used used from Java also,
+   * For extensions written in Scala that are to be used from Java also,
    * this method should be overridden to get correct return type.
    * {{{
    * override def get(system: ActorSystem): TheExtension = super.get(system)
@@ -89,6 +94,18 @@ trait ExtensionId[T <: Extension] {
    *
    */
   def get(system: ActorSystem): T = apply(system)
+
+  /**
+   * Returns an instance of the extension identified by this ExtensionId instance.
+   * Java API
+   * For extensions written in Scala that are to be used from Java also,
+   * this method should be overridden to get correct return type.
+   * {{{
+   * override def get(system: ClassicActorSystemProvider): TheExtension = super.get(system)
+   * }}}
+   *
+   */
+  def get(system: ClassicActorSystemProvider): T = apply(system)
 
   /**
    * Is used by Akka to instantiate the Extension identified by this ExtensionId,
@@ -111,44 +128,9 @@ abstract class AbstractExtensionId[T <: Extension] extends ExtensionId[T]
  * The lookup method should return the canonical reference to the extension.
  */
 trait ExtensionIdProvider {
+
   /**
    * Returns the canonical ExtensionId for this Extension
    */
   def lookup(): ExtensionId[_ <: Extension]
-}
-
-/**
- * This is a one-stop-shop if all you want is an extension which is
- * constructed with the ExtendedActorSystem as its only constructor argument:
- *
- * {{{
- * object MyExt extends ExtensionKey[Ext]
- *
- * class Ext(system: ExtendedActorSystem) extends Extension {
- *   ...
- * }
- * }}}
- *
- * Java API:
- *
- * {{{
- * public class MyExt extends Extension {
- *   public static final ExtensionKey<MyExt> key = new ExtensionKey<MyExt>(MyExt.class);
- *
- *   public MyExt(ExtendedActorSystem system) {
- *     ...
- *   }
- * }
- * }}}
- *
- * Note: Don't use this class if the extension is written in Scala and consumed in
- * Eclipse Java projects. JDT has problems resolving correct type for the
- * `get` method.
- *
- */
-abstract class ExtensionKey[T <: Extension](implicit m: ClassTag[T]) extends ExtensionId[T] with ExtensionIdProvider {
-  def this(clazz: Class[T]) = this()(ClassTag(clazz))
-
-  override def lookup(): ExtensionId[T] = this
-  def createExtension(system: ExtendedActorSystem): T = system.dynamicAccess.createInstanceFor[T](m.runtimeClass, List(classOf[ExtendedActorSystem] -> system)).get
 }

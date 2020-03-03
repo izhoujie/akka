@@ -1,5 +1,5 @@
-/**
- * Copyright (C) 2009-2015 Typesafe Inc. <http://www.typesafe.com>
+/*
+ * Copyright (C) 2009-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
 package akka.cluster.metrics
@@ -7,14 +7,13 @@ package akka.cluster.metrics
 import akka.actor.ActorSystem
 import akka.actor.ExtendedActorSystem
 import akka.event.Logging
-import akka.event.LoggingAdapter
 import akka.ConfigurationException
 import akka.actor.Address
 import java.lang.management.MemoryMXBean
 import java.lang.management.ManagementFactory
 import java.lang.management.OperatingSystemMXBean
 import java.lang.management.MemoryUsage
-import java.lang.System.{ currentTimeMillis ⇒ newTimestamp }
+import java.lang.System.{ currentTimeMillis => newTimestamp }
 import akka.cluster.Cluster
 import java.io.Closeable
 import org.hyperic.sigar.SigarProxy
@@ -25,6 +24,7 @@ import org.hyperic.sigar.SigarProxy
  * Implementations of cluster system metrics collectors extend this trait.
  */
 trait MetricsCollector extends Closeable {
+
   /**
    * Samples and collects new data points.
    * This method is invoked periodically and should return
@@ -47,7 +47,7 @@ private[metrics] object MetricsCollector {
 
   /** Try to create collector instance in the order of priority. */
   def apply(system: ActorSystem): MetricsCollector = {
-    val log = Logging(system, getClass.getName)
+    val log = Logging(system, getClass)
     val settings = ClusterMetricsSettings(system.settings.config)
     import settings._
 
@@ -60,19 +60,23 @@ private[metrics] object MetricsCollector {
 
     def create(provider: String) = TryNative {
       log.debug(s"Trying ${provider}.")
-      system.asInstanceOf[ExtendedActorSystem].dynamicAccess
-        .createInstanceFor[MetricsCollector](provider, List(classOf[ActorSystem] -> system)).get
+      system
+        .asInstanceOf[ExtendedActorSystem]
+        .dynamicAccess
+        .createInstanceFor[MetricsCollector](provider, List(classOf[ActorSystem] -> system))
+        .get
     }
 
-    val collector = if (useCustom)
-      create(collectorCustom)
-    else if (useInternal)
-      create(collectorSigar) orElse create(collectorJMX)
-    else // Use complete fall back chain.
-      create(collectorCustom) orElse create(collectorSigar) orElse create(collectorJMX)
+    val collector =
+      if (useCustom)
+        create(collectorCustom)
+      else if (useInternal)
+        create(collectorSigar).orElse(create(collectorJMX))
+      else // Use complete fall back chain.
+        create(collectorCustom).orElse(create(collectorSigar)).orElse(create(collectorJMX))
 
     collector.recover {
-      case e ⇒ throw new ConfigurationException(s"Could not create metrics collector: ${e}")
+      case e => throw new ConfigurationException(s"Could not create metrics collector: ${e}")
     }.get
   }
 }
@@ -81,14 +85,13 @@ private[metrics] object MetricsCollector {
  * Loads JVM and system metrics through JMX monitoring beans.
  *
  * @param address The [[akka.actor.Address]] of the node being sampled
- * @param decay how quickly the exponential weighting of past data is decayed
+ * @param decayFactor how quickly the exponential weighting of past data is decayed
  */
 class JmxMetricsCollector(address: Address, decayFactor: Double) extends MetricsCollector {
   import StandardMetrics._
 
   private def this(address: Address, settings: ClusterMetricsSettings) =
-    this(address,
-      EWMA.alpha(settings.CollectorMovingAverageHalfLife, settings.CollectorSampleInterval))
+    this(address, EWMA.alpha(settings.CollectorMovingAverageHalfLife, settings.CollectorSampleInterval))
 
   /**
    * This constructor is used when creating an instance from configured FQCN
@@ -122,19 +125,15 @@ class JmxMetricsCollector(address: Address, decayFactor: Double) extends Metrics
    * returned from JMX, and None is returned from this method.
    * Creates a new instance each time.
    */
-  def systemLoadAverage: Option[Metric] = Metric.create(
-    name = SystemLoadAverage,
-    value = osMBean.getSystemLoadAverage,
-    decayFactor = None)
+  def systemLoadAverage: Option[Metric] =
+    Metric.create(name = SystemLoadAverage, value = osMBean.getSystemLoadAverage, decayFactor = None)
 
   /**
    * (JMX) Returns the number of available processors
    * Creates a new instance each time.
    */
-  def processors: Option[Metric] = Metric.create(
-    name = Processors,
-    value = osMBean.getAvailableProcessors,
-    decayFactor = None)
+  def processors: Option[Metric] =
+    Metric.create(name = Processors, value = osMBean.getAvailableProcessors, decayFactor = None)
 
   /**
    * Current heap to be passed in to heapUsed, heapCommitted and heapMax
@@ -145,20 +144,16 @@ class JmxMetricsCollector(address: Address, decayFactor: Double) extends Metrics
    * (JMX) Returns the current sum of heap memory used from all heap memory pools (in bytes).
    * Creates a new instance each time.
    */
-  def heapUsed(heap: MemoryUsage): Option[Metric] = Metric.create(
-    name = HeapMemoryUsed,
-    value = heap.getUsed,
-    decayFactor = decayFactorOption)
+  def heapUsed(heap: MemoryUsage): Option[Metric] =
+    Metric.create(name = HeapMemoryUsed, value = heap.getUsed, decayFactor = decayFactorOption)
 
   /**
    * (JMX) Returns the current sum of heap memory guaranteed to be available to the JVM
    * from all heap memory pools (in bytes).
    * Creates a new instance each time.
    */
-  def heapCommitted(heap: MemoryUsage): Option[Metric] = Metric.create(
-    name = HeapMemoryCommitted,
-    value = heap.getCommitted,
-    decayFactor = decayFactorOption)
+  def heapCommitted(heap: MemoryUsage): Option[Metric] =
+    Metric.create(name = HeapMemoryCommitted, value = heap.getCommitted, decayFactor = decayFactorOption)
 
   /**
    * (JMX) Returns the maximum amount of memory (in bytes) that can be used
@@ -166,10 +161,8 @@ class JmxMetricsCollector(address: Address, decayFactor: Double) extends Metrics
    * never negative.
    * Creates a new instance each time.
    */
-  def heapMax(heap: MemoryUsage): Option[Metric] = Metric.create(
-    name = HeapMemoryMax,
-    value = heap.getMax,
-    decayFactor = None)
+  def heapMax(heap: MemoryUsage): Option[Metric] =
+    Metric.create(name = HeapMemoryMax, value = heap.getMax, decayFactor = None)
 
   override def close(): Unit = ()
 
@@ -184,19 +177,17 @@ class JmxMetricsCollector(address: Address, decayFactor: Double) extends Metrics
  * to missing classes or native libraries.
  *
  * @param address The [[akka.actor.Address]] of the node being sampled
- * @param decay how quickly the exponential weighting of past data is decayed
+ * @param decayFactor how quickly the exponential weighting of past data is decayed
  * @param sigar the org.hyperic.Sigar instance
  */
 class SigarMetricsCollector(address: Address, decayFactor: Double, sigar: SigarProxy)
-  extends JmxMetricsCollector(address, decayFactor) {
+    extends JmxMetricsCollector(address, decayFactor) {
 
   import StandardMetrics._
   import org.hyperic.sigar.CpuPerc
 
   def this(address: Address, settings: ClusterMetricsSettings, sigar: SigarProxy) =
-    this(address,
-      EWMA.alpha(settings.CollectorMovingAverageHalfLife, settings.CollectorSampleInterval),
-      sigar)
+    this(address, EWMA.alpha(settings.CollectorMovingAverageHalfLife, settings.CollectorSampleInterval), sigar)
 
   def this(address: Address, settings: ClusterMetricsSettings) =
     this(address, settings, DefaultSigarProvider(settings).createSigarInstance)
@@ -218,7 +209,7 @@ class SigarMetricsCollector(address: Address, decayFactor: Double, sigar: SigarP
   override def metrics(): Set[Metric] = {
     // Must obtain cpuPerc in one shot. See https://github.com/akka/akka/issues/16121
     val cpuPerc = sigar.getCpuPerc
-    super.metrics ++ Set(cpuCombined(cpuPerc), cpuStolen(cpuPerc)).flatten
+    super.metrics.union(Set(cpuCombined(cpuPerc), cpuStolen(cpuPerc)).flatten)
   }
 
   /**
@@ -226,10 +217,8 @@ class SigarMetricsCollector(address: Address, decayFactor: Double, sigar: SigarP
    *
    * Creates a new instance each time.
    */
-  override def systemLoadAverage: Option[Metric] = Metric.create(
-    name = SystemLoadAverage,
-    value = sigar.getLoadAverage()(0).asInstanceOf[Number],
-    decayFactor = None)
+  override def systemLoadAverage: Option[Metric] =
+    Metric.create(name = SystemLoadAverage, value = sigar.getLoadAverage()(0).asInstanceOf[Number], decayFactor = None)
 
   /**
    * (SIGAR) Returns the combined CPU sum of User + Sys + Nice + Wait, in percentage. This metric can describe
@@ -237,26 +226,22 @@ class SigarMetricsCollector(address: Address, decayFactor: Double, sigar: SigarP
    * theoretically. Note that 99% CPU utilization can be optimal or indicative of failure.
    *
    * In the data stream, this will sometimes return with a valid metric value, and sometimes as a NaN or Infinite.
-   * Documented bug https://bugzilla.redhat.com/show_bug.cgi?id=749121 and several others.
+   * Documented bug <a href="https://bugzilla.redhat.com/show_bug.cgi?id=749121">749121</a> and several others.
    *
    * Creates a new instance each time.
    */
-  def cpuCombined(cpuPerc: CpuPerc): Option[Metric] = Metric.create(
-    name = CpuCombined,
-    value = cpuPerc.getCombined.asInstanceOf[Number],
-    decayFactor = decayFactorOption)
+  def cpuCombined(cpuPerc: CpuPerc): Option[Metric] =
+    Metric.create(name = CpuCombined, value = cpuPerc.getCombined.asInstanceOf[Number], decayFactor = decayFactorOption)
 
   /**
    * (SIGAR) Returns the stolen CPU time. Relevant to virtual hosting environments.
-   * For details please see: [[http://en.wikipedia.org/wiki/CPU_time#Subdivision Wikipedia - CPU time subdivision]] and
-   * [[https://www.datadoghq.com/2013/08/understanding-aws-stolen-cpu-and-how-it-affects-your-apps/ Understanding AWS stolen CPU and how it affects your apps]]
+   * For details please see: <a href="http://en.wikipedia.org/wiki/CPU_time#Subdivision">Wikipedia - CPU time subdivision</a> and
+   * <a href="https://www.datadoghq.com/2013/08/understanding-aws-stolen-cpu-and-how-it-affects-your-apps/">Understanding AWS stolen CPU and how it affects your apps</a>
    *
    * Creates a new instance each time.
    */
-  def cpuStolen(cpuPerc: CpuPerc): Option[Metric] = Metric.create(
-    name = CpuStolen,
-    value = cpuPerc.getStolen.asInstanceOf[Number],
-    decayFactor = decayFactorOption)
+  def cpuStolen(cpuPerc: CpuPerc): Option[Metric] =
+    Metric.create(name = CpuStolen, value = cpuPerc.getStolen.asInstanceOf[Number], decayFactor = decayFactorOption)
 
   /**
    * (SIGAR) Returns the idle CPU time.
@@ -264,10 +249,8 @@ class SigarMetricsCollector(address: Address, decayFactor: Double, sigar: SigarP
    *
    * Creates a new instance each time.
    */
-  def cpuIdle(cpuPerc: CpuPerc): Option[Metric] = Metric.create(
-    name = CpuIdle,
-    value = cpuPerc.getIdle.asInstanceOf[Number],
-    decayFactor = decayFactorOption)
+  def cpuIdle(cpuPerc: CpuPerc): Option[Metric] =
+    Metric.create(name = CpuIdle, value = cpuPerc.getIdle.asInstanceOf[Number], decayFactor = decayFactorOption)
 
   /**
    * Releases any native resources associated with this instance.
